@@ -41,34 +41,17 @@ def _selects_relaxed_coverage_marker(markexpr: str) -> bool:
     except SyntaxError:
         return normalized in RELAXED_COVERAGE_MARKERS
 
-    if not _references_relaxed_coverage_marker(expression.body):
-        return False
-
-    marker_sets = (
-        frozenset({"integration"}),
-        frozenset({"e2e"}),
-        RELAXED_COVERAGE_MARKERS,
-    )
-    return any(_evaluate_marker_expression(expression.body, markers) for markers in marker_sets)
+    return _references_positive_relaxed_coverage_marker(expression.body)
 
 
-def _references_relaxed_coverage_marker(node: ast.expr) -> bool:
+def _references_positive_relaxed_coverage_marker(node: ast.expr, *, negated: bool = False) -> bool:
     if isinstance(node, ast.Name):
-        return node.id in RELAXED_COVERAGE_MARKERS
-    if isinstance(node, ast.UnaryOp):
-        return _references_relaxed_coverage_marker(node.operand)
-    if isinstance(node, ast.BoolOp):
-        return any(_references_relaxed_coverage_marker(value) for value in node.values)
-    return False
-
-
-def _evaluate_marker_expression(node: ast.expr, selected_markers: frozenset[str]) -> bool:
-    if isinstance(node, ast.Name):
-        return node.id in selected_markers
+        return not negated and node.id in RELAXED_COVERAGE_MARKERS
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return not _evaluate_marker_expression(node.operand, selected_markers)
-    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
-        return all(_evaluate_marker_expression(value, selected_markers) for value in node.values)
-    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
-        return any(_evaluate_marker_expression(value, selected_markers) for value in node.values)
+        return _references_positive_relaxed_coverage_marker(node.operand, negated=not negated)
+    if isinstance(node, ast.BoolOp):
+        return any(
+            _references_positive_relaxed_coverage_marker(value, negated=negated)
+            for value in node.values
+        )
     return False

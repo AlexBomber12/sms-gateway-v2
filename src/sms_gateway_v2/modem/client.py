@@ -160,15 +160,18 @@ class ModemManagerClient:
         self._watch_tasks: set[asyncio.Future[None]] = set()
         self._added_callbacks: list[AddedCallback] = []
         self._added_watch_keys: set[tuple[str, int]] = set()
+        self._added_watch_resubscribe_required = False
 
     async def connect(self) -> None:
         if self._bus is not None and self._bus.connected:
+            await self._resubscribe_added_watchers_after_reconnect()
             return
 
         if self._bus is not None:
             self._bus = None
             self._modem_path = None
             self._added_watch_keys.clear()
+            self._added_watch_resubscribe_required = bool(self._added_callbacks)
 
         started_at = time.monotonic()
         try:
@@ -181,6 +184,8 @@ class ModemManagerClient:
             "client_connected",
             duration_seconds=time.monotonic() - started_at,
         )
+        if self._added_callbacks and not self._added_watch_keys:
+            self._added_watch_resubscribe_required = True
         await self._resubscribe_added_watchers_after_reconnect()
 
     async def disconnect(self) -> None:
@@ -192,6 +197,7 @@ class ModemManagerClient:
         self._modem_path = None
         self._added_callbacks.clear()
         self._added_watch_keys.clear()
+        self._added_watch_resubscribe_required = False
         logger.info("client_disconnected")
 
     async def find_modem(self) -> str:
@@ -447,12 +453,14 @@ class ModemManagerClient:
                 self._added_watch_keys.add(watch_key)
 
     async def _resubscribe_added_watchers(self, modem_path: str) -> None:
+        self._added_watch_resubscribe_required = bool(self._added_callbacks)
         self._added_watch_keys.clear()
         for callback in self._added_callbacks:
             await self._subscribe_added_watch(modem_path, callback)
+        self._added_watch_resubscribe_required = False
 
     async def _resubscribe_added_watchers_after_reconnect(self) -> None:
-        if self._added_callbacks:
+        if self._added_watch_resubscribe_required:
             modem_path = await self.find_modem()
             await self._resubscribe_added_watchers(modem_path)
 
