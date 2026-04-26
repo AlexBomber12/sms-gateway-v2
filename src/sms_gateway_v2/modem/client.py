@@ -4,6 +4,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from types import MethodType
 from typing import Protocol, TypeVar, cast
 
 import structlog
@@ -93,6 +94,7 @@ DBUS_OPERATION_ERRORS = (
 ManagedObjects = dict[str, dict[str, object]]
 PropertyValue = TypeVar("PropertyValue")
 AddedCallback = Callable[[str], Awaitable[None]]
+CallbackKey = tuple[str, int, int]
 
 
 class ProxyObject(Protocol):
@@ -158,8 +160,8 @@ class ModemManagerClient:
         self._bus: MessageBus | None = None
         self._modem_path: str | None = None
         self._watch_tasks: set[asyncio.Future[None]] = set()
-        self._added_callbacks: list[AddedCallback] = []
-        self._added_watch_keys: set[tuple[str, int]] = set()
+        self._added_callbacks: dict[CallbackKey, AddedCallback] = {}
+        self._added_watch_keys: set[tuple[str, CallbackKey]] = set()
         self._added_watch_resubscribe_required = False
 
     async def connect(self) -> None:
@@ -405,10 +407,15 @@ class ModemManagerClient:
         )
 
     async def watch_added(self, callback: AddedCallback) -> None:
-        if callback not in self._added_callbacks:
-            self._added_callbacks.append(callback)
+        callback_key = self._callback_key(callback)
+        callback = self._added_callbacks.setdefault(callback_key, callback)
         modem_path = await self._ensure_modem_path()
-        await self._subscribe_added_watch(modem_path, callback)
+        await self._subscribe_added_watch(modem_path, callback_key, callback)
+
+    def _callback_key(self, callback: AddedCallback) -> CallbackKey:
+        if isinstance(callback, MethodType):
+            return ("method", id(callback.__self__), id(callback.__func__))
+        return ("callable", id(callback), 0)
 
     def _build_added_handler(
         self,
@@ -443,11 +450,16 @@ class ModemManagerClient:
 
         return handle_added
 
-    async def _subscribe_added_watch(self, modem_path: str, callback: AddedCallback) -> None:
-        watch_key = (modem_path, id(callback))
+    async def _subscribe_added_watch(
+        self,
+        modem_path: str,
+        callback_key: CallbackKey,
+        callback: AddedCallback,
+    ) -> None:
+        watch_key = (modem_path, callback_key)
         if watch_key not in self._added_watch_keys:
             modem_path, messaging = await self._get_messaging_interface(modem_path)
-            watch_key = (modem_path, id(callback))
+            watch_key = (modem_path, callback_key)
             if watch_key not in self._added_watch_keys:
                 messaging.on_added(self._build_added_handler(modem_path, callback))
                 self._added_watch_keys.add(watch_key)
@@ -455,8 +467,8 @@ class ModemManagerClient:
     async def _resubscribe_added_watchers(self, modem_path: str) -> None:
         self._added_watch_resubscribe_required = bool(self._added_callbacks)
         self._added_watch_keys.clear()
-        for callback in self._added_callbacks:
-            await self._subscribe_added_watch(modem_path, callback)
+        for callback_key, callback in self._added_callbacks.items():
+            await self._subscribe_added_watch(modem_path, callback_key, callback)
         self._added_watch_resubscribe_required = False
 
     async def _resubscribe_added_watchers_after_reconnect(self) -> None:

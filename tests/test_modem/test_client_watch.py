@@ -16,6 +16,16 @@ SMS_PATH = "/org/freedesktop/ModemManager1/SMS/1"
 UNKNOWN_OBJECT_ERROR = "org.freedesktop.DBus.Error.UnknownObject"
 
 
+class WatchReceiver:
+    def __init__(self) -> None:
+        self.received_paths: list[str] = []
+        self.signal_received = asyncio.Event()
+
+    async def callback(self, sms_path: str) -> None:
+        self.received_paths.append(sms_path)
+        self.signal_received.set()
+
+
 async def test_watch_added_invokes_callback_when_added_signal_is_emitted(
     fake_bus: MagicMock,
     fake_messaging_proxy: MagicMock,
@@ -38,6 +48,26 @@ async def test_watch_added_invokes_callback_when_added_signal_is_emitted(
 
     fake_messaging_proxy.messaging.on_added.assert_called_once()
     assert received_paths == [SMS_PATH]
+
+
+async def test_watch_added_deduplicates_repeated_bound_method_registration(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    fake_bus.get_proxy_object.return_value = fake_messaging_proxy
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    receiver = WatchReceiver()
+
+    await client.watch_added(receiver.callback)
+    await client.watch_added(receiver.callback)
+    fake_messaging_proxy.messaging.added_handler(SMS_PATH, True)
+    await asyncio.wait_for(receiver.signal_received.wait(), timeout=1)
+    await wait_for_watch_tasks(client)
+
+    fake_messaging_proxy.messaging.on_added.assert_called_once()
+    assert receiver.received_paths == [SMS_PATH]
 
 
 async def test_watch_added_ignores_non_received_added_signal(

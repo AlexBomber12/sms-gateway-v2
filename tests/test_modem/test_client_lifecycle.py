@@ -115,7 +115,7 @@ async def test_connect_after_dropped_bus_resubscribes_added_watchers(
     async def callback(_sms_path: str) -> None:
         return None
 
-    client._added_callbacks.append(callback)
+    client._added_callbacks[client._callback_key(callback)] = callback
     await client.connect()
 
     assert client._bus is fake_bus
@@ -153,7 +153,7 @@ async def test_connect_retries_watcher_resubscription_after_failed_reconnect(
     async def callback(_sms_path: str) -> None:
         return None
 
-    client._added_callbacks.append(callback)
+    client._added_callbacks[client._callback_key(callback)] = callback
     with pytest.raises(ModemNotFound, match="no ModemManager modem object found"):
         await client.connect()
 
