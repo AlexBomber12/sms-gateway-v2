@@ -499,10 +499,19 @@ class ModemManagerClient:
     def _parse_timestamp(self, value: str | None) -> datetime | None:
         if not value:
             return None
+        normalized = self._normalize_timestamp_offset(value.replace("Z", "+00:00"))
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return datetime.fromisoformat(normalized)
         except ValueError:
             return None
+
+    def _normalize_timestamp_offset(self, value: str) -> str:
+        normalized = value
+        if len(value) >= 5 and value[-5] in {"+", "-"}:
+            offset = value[-4:]
+            if offset.isdecimal():
+                normalized = f"{value[:-5]}{value[-5]}{offset[:2]}:{offset[2:]}"
+        return normalized
 
     def _message_sort_key(self, message: IncomingSms) -> tuple[int, float, str]:
         if message.timestamp is not None:

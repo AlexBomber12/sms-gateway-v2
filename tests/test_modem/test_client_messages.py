@@ -69,6 +69,27 @@ async def test_list_messages_returns_parsed_messages_ordered_by_timestamp(
     assert messages[0].pdu_type == "deliver"
 
 
+async def test_list_messages_parses_modem_manager_timestamp_offset_without_colon(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="message",
+        timestamp="2026-04-26T13:41:00+0300",
+    )
+    fake_messaging_proxy.messaging.get_messages.return_value = [SMS_PATH_1]
+    fake_bus.get_proxy_object.side_effect = [fake_messaging_proxy, sms]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    messages = await client.list_messages()
+
+    assert messages[0].timestamp is not None
+    assert messages[0].timestamp.isoformat() == "2026-04-26T13:41:00+03:00"
+
+
 async def test_list_messages_handles_missing_timestamp_by_ordering_by_path(
     fake_bus: MagicMock,
     fake_messaging_proxy: MagicMock,
