@@ -151,10 +151,7 @@ class ModemManagerClient:
 
     async def get_modem_info(self) -> ModemInfo:
         started_at = time.monotonic()
-        if self._modem_path is None:
-            await self.find_modem()
-        modem_path = self._modem_path
-        assert modem_path is not None
+        modem_path = await self._ensure_modem_path()
 
         bus = self._require_bus()
         introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
@@ -203,10 +200,60 @@ class ModemManagerClient:
         )
         return info
 
+    async def get_signal_quality(self) -> SignalQuality:
+        started_at = time.monotonic()
+        modem_path = await self._ensure_modem_path()
+        bus = self._require_bus()
+        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
+        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
+        modem = cast(ModemInterface, proxy.get_interface(MODEM_INTERFACE))
+
+        signal_percent, signal_recent = await self._read_required(
+            "SignalQuality",
+            modem.get_signal_quality,
+        )
+        signal = SignalQuality(percent=signal_percent, recent=signal_recent)
+        logger.info(
+            "signal_read",
+            duration_seconds=time.monotonic() - started_at,
+            modem_path=modem_path,
+            percent=signal.percent,
+            recent=signal.recent,
+        )
+        return signal
+
+    async def get_registration_state(self) -> RegistrationState:
+        started_at = time.monotonic()
+        modem_path = await self._ensure_modem_path()
+        bus = self._require_bus()
+        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
+        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
+        modem_3gpp = cast(Modem3gppInterface, proxy.get_interface(MODEM_3GPP_INTERFACE))
+
+        registration_value = await self._read_required(
+            "RegistrationState",
+            modem_3gpp.get_registration_state,
+        )
+        registration = RegistrationState.from_dbus_value(registration_value)
+        logger.info(
+            "registration_read",
+            duration_seconds=time.monotonic() - started_at,
+            modem_path=modem_path,
+            registration=registration.value,
+        )
+        return registration
+
     def _require_bus(self) -> MessageBus:
         if self._bus is None:
             raise ModemManagerUnavailable("not connected to system D-Bus")
         return self._bus
+
+    async def _ensure_modem_path(self) -> str:
+        if self._modem_path is None:
+            await self.find_modem()
+        modem_path = self._modem_path
+        assert modem_path is not None
+        return modem_path
 
     async def _get_sim_interface(self, sim_path: str) -> SimInterface:
         bus = self._require_bus()
