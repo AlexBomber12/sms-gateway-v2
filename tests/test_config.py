@@ -12,12 +12,21 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.delenv("HOST", raising=False)
     monkeypatch.delenv("PORT", raising=False)
     monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("STATE_DIR", raising=False)
+    monkeypatch.delenv("QUEUE_SENT_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("QUEUE_FAILED_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("DEDUP_WINDOW_MINUTES", raising=False)
 
     settings = Settings()
 
     assert settings.host == "127.0.0.1"
     assert settings.port == 8091
     assert settings.log_level == "INFO"
+    assert settings.state_dir == Path("./state")
+    assert settings.queue_sent_retention_days == 30
+    assert settings.queue_failed_retention_days == 30
+    assert settings.dedup_window_minutes == 1
+    assert settings.dedup_db_path == Path("./state/dedup.db")
 
 
 def test_settings_env_overrides_defaults(
@@ -28,9 +37,18 @@ def test_settings_env_overrides_defaults(
     monkeypatch.setenv("HOST", "0.0.0.0")
     monkeypatch.setenv("PORT", "9000")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "custom-state"))
+    monkeypatch.setenv("QUEUE_SENT_RETENTION_DAYS", "10")
+    monkeypatch.setenv("QUEUE_FAILED_RETENTION_DAYS", "20")
+    monkeypatch.setenv("DEDUP_WINDOW_MINUTES", "5")
 
     settings = get_settings()
 
     assert settings.host == "0.0.0.0"
     assert settings.port == 9000
     assert settings.log_level == "DEBUG"
+    assert settings.state_dir == tmp_path / "custom-state"
+    assert settings.queue_sent_retention_days == 10
+    assert settings.queue_failed_retention_days == 20
+    assert settings.dedup_window_minutes == 5
+    assert settings.dedup_db_path == tmp_path / "custom-state" / "dedup.db"
