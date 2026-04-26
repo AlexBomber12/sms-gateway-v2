@@ -41,12 +41,25 @@ def _selects_relaxed_coverage_marker(markexpr: str) -> bool:
     except SyntaxError:
         return normalized in RELAXED_COVERAGE_MARKERS
 
+    if not _references_relaxed_coverage_marker(expression.body):
+        return False
+
     marker_sets = (
         frozenset({"integration"}),
         frozenset({"e2e"}),
         RELAXED_COVERAGE_MARKERS,
     )
     return any(_evaluate_marker_expression(expression.body, markers) for markers in marker_sets)
+
+
+def _references_relaxed_coverage_marker(node: ast.expr) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in RELAXED_COVERAGE_MARKERS
+    if isinstance(node, ast.UnaryOp):
+        return _references_relaxed_coverage_marker(node.operand)
+    if isinstance(node, ast.BoolOp):
+        return any(_references_relaxed_coverage_marker(value) for value in node.values)
+    return False
 
 
 def _evaluate_marker_expression(node: ast.expr, selected_markers: frozenset[str]) -> bool:
