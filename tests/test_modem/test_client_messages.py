@@ -122,21 +122,12 @@ async def test_list_messages_tolerates_blank_or_invalid_timestamp(
 @pytest.mark.parametrize(
     ("raw_pdu_type", "expected"),
     [
-        (0, "unknown"),
         (1, "deliver"),
-        (2, "submit"),
-        (3, "status-report"),
         (32, "cdma-deliver"),
-        (33, "cdma-submit"),
-        (34, "cdma-cancellation"),
-        (35, "cdma-delivery-acknowledgement"),
-        (36, "cdma-user-acknowledgement"),
-        (37, "cdma-read-acknowledgement"),
-        (999, "unknown"),
         ("deliver", "deliver"),
     ],
 )
-async def test_list_messages_decodes_pdu_type(
+async def test_list_messages_decodes_inbound_pdu_type(
     fake_bus: MagicMock,
     fake_messaging_proxy: MagicMock,
     raw_pdu_type: int | str,
@@ -157,6 +148,46 @@ async def test_list_messages_decodes_pdu_type(
     messages = await client.list_messages()
 
     assert messages[0].pdu_type == expected
+
+
+@pytest.mark.parametrize(
+    "raw_pdu_type",
+    [
+        0,
+        2,
+        3,
+        33,
+        34,
+        35,
+        36,
+        37,
+        999,
+        "submit",
+    ],
+)
+async def test_list_messages_filters_non_inbound_pdu_type(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    raw_pdu_type: int | str,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="message",
+        timestamp="2026-04-26T10:41:00+00:00",
+        pdu_type=raw_pdu_type,
+    )
+    fake_messaging_proxy.messaging.get_messages.return_value = [SMS_PATH_1]
+    fake_bus.get_proxy_object.side_effect = [fake_messaging_proxy, sms]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    messages = await client.list_messages()
+
+    assert messages == []
+    sms.sms.get_number.assert_not_awaited()
+    sms.sms.get_text.assert_not_awaited()
+    sms.sms.get_timestamp.assert_not_awaited()
 
 
 async def test_delete_message_succeeds_silently_on_happy_path(

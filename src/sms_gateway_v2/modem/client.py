@@ -70,6 +70,7 @@ SMS_PDU_TYPES = {
     36: "cdma-user-acknowledgement",
     37: "cdma-read-acknowledgement",
 }
+INBOUND_SMS_PDU_TYPES = {"deliver", "cdma-deliver"}
 DBUS_OPERATION_ERRORS = (
     OSError,
     AuthError,
@@ -327,14 +328,21 @@ class ModemManagerClient:
 
         for sms_path in sms_paths:
             sms = await self._get_sms_interface(sms_path)
+            pdu_type = self._decode_pdu_type(await self._read_required("PduType", sms.get_pdu_type))
+            if pdu_type not in INBOUND_SMS_PDU_TYPES:
+                logger.info(
+                    "message_skipped_non_inbound",
+                    modem_path=modem_path,
+                    sms_path=sms_path,
+                    pdu_type=pdu_type,
+                )
+                continue
             message = IncomingSms(
                 object_path=sms_path,
                 number=await self._read_required("Number", sms.get_number),
                 text=await self._read_required("Text", sms.get_text),
                 timestamp=self._parse_timestamp(await self._read_optional(sms.get_timestamp)),
-                pdu_type=self._decode_pdu_type(
-                    await self._read_required("PduType", sms.get_pdu_type)
-                ),
+                pdu_type=pdu_type,
             )
             messages.append(message)
             logger.info(
@@ -377,7 +385,20 @@ class ModemManagerClient:
                 return
             task = asyncio.ensure_future(callback(sms_path))
             self._watch_tasks.add(task)
-            task.add_done_callback(self._watch_tasks.discard)
+
+            def handle_task_done(done_task: asyncio.Future[None]) -> None:
+                self._watch_tasks.discard(done_task)
+                try:
+                    done_task.result()
+                except Exception as exc:
+                    logger.exception(
+                        "message_added_callback_failed",
+                        modem_path=modem_path,
+                        sms_path=sms_path,
+                        error=str(exc),
+                    )
+
+            task.add_done_callback(handle_task_done)
 
         messaging.on_added(handle_added)
 
