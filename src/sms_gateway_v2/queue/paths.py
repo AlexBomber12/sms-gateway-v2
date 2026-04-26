@@ -32,7 +32,9 @@ def atomic_move(item_id: str, source_dir: Path, dest_dir: Path) -> Path:
     source_path = source_dir / f"{item_id}.json"
     dest_path = dest_dir / f"{item_id}.json"
     os.replace(source_path, dest_path)
-    fsync_dir(dest_dir)
+    fsync_dir(source_dir)
+    if dest_dir != source_dir:
+        fsync_dir(dest_dir)
     return dest_path
 
 

@@ -115,6 +115,26 @@ async def test_update_status_raises_item_not_found_for_missing_hash(tmp_path: Pa
     await store.close()
 
 
+async def test_delete_by_item_id_deletes_matching_row_and_returns_count(tmp_path: Path) -> None:
+    db_path = tmp_path / "dedup.db"
+    store = DedupStore(db_path)
+    await store.initialize()
+    await store.record_new("hash", "item-id")
+
+    deleted = await store.delete_by_item_id("item-id")
+    missing_deleted = await store.delete_by_item_id("missing-item-id")
+
+    remaining = await fetch_one(
+        db_path,
+        "SELECT COUNT(*) FROM seen_messages WHERE content_hash = ?",
+        ("hash",),
+    )
+    assert deleted == 1
+    assert missing_deleted == 0
+    assert remaining == (0,)
+    await store.close()
+
+
 async def test_purge_older_than_deletes_only_matching_status_older_than_cutoff(
     tmp_path: Path,
 ) -> None:

@@ -85,17 +85,26 @@ class Queue:
                 try:
                     item = await asyncio.to_thread(load_item, path)
                 except QueueCorrupted as exc:
+                    item_id = path.stem
                     logger.warning(
                         "queue_item_corrupted",
+                        item_id=item_id,
                         path=str(path),
                         error=str(exc),
                         elapsed_ms=_elapsed_ms(started_at),
                     )
                     await asyncio.to_thread(
                         atomic_move,
-                        path.stem,
+                        item_id,
                         self._dirs["pending"],
                         self._dirs["failed"],
+                    )
+                    dedup_rows_removed = await self._dedup.delete_by_item_id(item_id)
+                    logger.info(
+                        "queue_corrupted_item_dedup_removed",
+                        item_id=item_id,
+                        dedup_rows_removed=dedup_rows_removed,
+                        elapsed_ms=_elapsed_ms(started_at),
                     )
                     continue
 

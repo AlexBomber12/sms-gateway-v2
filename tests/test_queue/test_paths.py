@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import sms_gateway_v2.queue.paths as queue_paths
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue import QueueItem
 from sms_gateway_v2.queue.exceptions import QueueCorrupted
@@ -59,6 +60,24 @@ def test_atomic_move_moves_between_dirs(state_dir: Path, sample_sms: IncomingSms
     assert dest_path == dirs["processing"] / f"{item.id}.json"
     assert dest_path.exists()
     assert not source_path.exists()
+
+
+def test_atomic_move_fsyncs_source_and_destination_directories(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dirs = ensure_state_dirs(state_dir)
+    item = make_item(sample_sms, "1714149693000-0123456789abcdef0123456789abcdef")
+    source_path = atomic_write_json(item, dirs)
+    synced_dirs: list[Path] = []
+    monkeypatch.setattr(queue_paths, "fsync_dir", synced_dirs.append)
+
+    dest_path = queue_paths.atomic_move(item.id, dirs["pending"], dirs["processing"])
+
+    assert dest_path.exists()
+    assert not source_path.exists()
+    assert synced_dirs == [dirs["pending"], dirs["processing"]]
 
 
 def test_atomic_move_raises_file_not_found_for_missing_source(state_dir: Path) -> None:

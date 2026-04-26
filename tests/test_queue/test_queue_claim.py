@@ -70,6 +70,23 @@ async def test_claim_next_on_corrupt_file_moves_it_to_failed_and_tries_next(
     assert (queue._dirs["processing"] / f"{valid.id}.json").exists()
 
 
+async def test_claim_next_on_corrupt_enqueued_file_removes_dedup_row(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    item = await queue.enqueue(sample_sms)
+    assert item is not None
+    pending_path = queue._dirs["pending"] / f"{item.id}.json"
+    pending_path.write_text("{bad-json", encoding="utf-8")
+
+    claimed = await queue.claim_next()
+
+    assert claimed is None
+    assert (queue._dirs["failed"] / f"{item.id}.json").exists()
+    assert await queue._dedup.is_duplicate(sample_sms.content_hash()) is False
+    assert await queue.enqueue(sample_sms) is not None
+
+
 async def test_claim_next_updates_dedup_status_to_processing(
     queue: Queue,
     sample_sms: IncomingSms,

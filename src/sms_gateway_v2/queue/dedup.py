@@ -88,6 +88,15 @@ class DedupStore:
         if cursor.rowcount == 0:
             raise ItemNotFound(f"content hash not found in dedup store: {content_hash}")
 
+    async def delete_by_item_id(self, item_id: str) -> int:
+        connection = self._connection_or_raise()
+        cursor = await connection.execute(
+            "DELETE FROM seen_messages WHERE item_id = ?",
+            (item_id,),
+        )
+        await connection.commit()
+        return cursor.rowcount
+
     async def purge_older_than(self, status: ItemStatus, max_age_days: int) -> int:
         connection = self._connection_or_raise()
         cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).timestamp()
