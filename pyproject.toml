@@ -17,6 +17,7 @@ dependencies = [
     "pydantic-settings>=2.2,<3.0",
     "structlog>=24.1,<26.0",
     "dbus-fast>=2.21,<3.0",
+    "aiosqlite>=0.20,<1.0",
 ]
 
 [project.optional-dependencies]
