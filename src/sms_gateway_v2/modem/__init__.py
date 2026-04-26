@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from sms_gateway_v2.modem.client import ModemManagerClient
 from sms_gateway_v2.modem.exceptions import (
     MessageDeleteFailed,
     ModemBusy,
@@ -15,6 +16,7 @@ __all__ = [
     "ModemBusy",
     "ModemError",
     "ModemInfo",
+    "ModemManagerClient",
     "ModemManagerUnavailable",
     "ModemNotFound",
     "RegistrationState",
