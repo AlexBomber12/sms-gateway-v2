@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sms_gateway_v2.modem import ModemManagerClient, ModemManagerUnavailable
+
+MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
+MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
 
 
 async def test_connect_happy_path(
@@ -88,3 +91,33 @@ async def test_connect_after_dropped_bus_clears_cached_modem_path(
     assert client._modem_path is None
     message_bus.assert_called_once()
     fake_bus.connect.assert_awaited_once()
+
+
+async def test_connect_after_dropped_bus_resubscribes_added_watchers(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_bus = MagicMock()
+    stale_bus.connected = False
+    object_manager = MagicMock()
+    object_manager.call_get_managed_objects = AsyncMock(
+        return_value={MODEM_PATH: {MODEM_INTERFACE: object()}}
+    )
+    object_manager_proxy = MagicMock()
+    object_manager_proxy.get_interface.return_value = object_manager
+    fake_bus.get_proxy_object.side_effect = [object_manager_proxy, fake_messaging_proxy]
+    message_bus = MagicMock(return_value=fake_bus)
+    monkeypatch.setattr("sms_gateway_v2.modem.client.MessageBus", message_bus)
+    client = ModemManagerClient()
+    client._bus = stale_bus
+
+    async def callback(_sms_path: str) -> None:
+        return None
+
+    client._added_callbacks.append(callback)
+    await client.connect()
+
+    assert client._bus is fake_bus
+    assert client._modem_path == MODEM_PATH
+    fake_messaging_proxy.messaging.on_added.assert_called_once()

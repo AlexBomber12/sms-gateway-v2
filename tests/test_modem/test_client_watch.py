@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dbus_fast import DBusError
 
 from sms_gateway_v2.modem import ModemManagerClient
+from tests.test_modem.conftest import make_fake_messaging_proxy
 
+MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
+REFRESHED_MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/1"
 SMS_PATH = "/org/freedesktop/ModemManager1/SMS/1"
+UNKNOWN_OBJECT_ERROR = "org.freedesktop.DBus.Error.UnknownObject"
 
 
 async def test_watch_added_invokes_callback_when_added_signal_is_emitted(
@@ -81,6 +86,53 @@ async def test_watch_added_logs_callback_failure(
         sms_path=SMS_PATH,
         error="callback failed",
     )
+
+
+async def test_watch_added_resubscribes_after_cached_modem_path_refresh(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    refreshed_messaging_proxy = make_fake_messaging_proxy()
+    object_manager = MagicMock()
+    object_manager.call_get_managed_objects = AsyncMock(
+        return_value={REFRESHED_MODEM_PATH: {MODEM_INTERFACE: object()}}
+    )
+    object_manager_proxy = MagicMock()
+    object_manager_proxy.get_interface.return_value = object_manager
+    fake_bus.introspect.side_effect = [
+        object(),
+        DBusError(UNKNOWN_OBJECT_ERROR, "stale modem path"),
+        object(),
+        object(),
+        object(),
+    ]
+    fake_bus.get_proxy_object.side_effect = [
+        fake_messaging_proxy,
+        object_manager_proxy,
+        refreshed_messaging_proxy,
+        fake_modem_proxy,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    received_paths: list[str] = []
+    signal_received = asyncio.Event()
+
+    async def callback(sms_path: str) -> None:
+        received_paths.append(sms_path)
+        signal_received.set()
+
+    await client.watch_added(callback)
+    await client.get_signal_quality()
+    refreshed_messaging_proxy.messaging.added_handler(SMS_PATH, True)
+    await asyncio.wait_for(signal_received.wait(), timeout=1)
+    await wait_for_watch_tasks(client)
+
+    fake_messaging_proxy.messaging.on_added.assert_called_once()
+    refreshed_messaging_proxy.messaging.on_added.assert_called_once()
+    assert client._modem_path == REFRESHED_MODEM_PATH
+    assert received_paths == [SMS_PATH]
 
 
 async def wait_for_watch_tasks(client: ModemManagerClient) -> None:

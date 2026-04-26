@@ -47,6 +47,10 @@ def fake_modem_proxy(fake_modem_props: MagicMock) -> MagicMock:
 
 @pytest.fixture
 def fake_messaging_proxy() -> MagicMock:
+    return make_fake_messaging_proxy()
+
+
+def make_fake_messaging_proxy() -> MagicMock:
     messaging = MagicMock()
     messaging.get_messages = AsyncMock(return_value=[])
     messaging.call_delete = AsyncMock(return_value=None)

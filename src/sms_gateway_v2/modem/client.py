@@ -92,6 +92,7 @@ DBUS_OPERATION_ERRORS = (
 
 ManagedObjects = dict[str, dict[str, object]]
 PropertyValue = TypeVar("PropertyValue")
+AddedCallback = Callable[[str], Awaitable[None]]
 
 
 class ProxyObject(Protocol):
@@ -157,6 +158,8 @@ class ModemManagerClient:
         self._bus: MessageBus | None = None
         self._modem_path: str | None = None
         self._watch_tasks: set[asyncio.Future[None]] = set()
+        self._added_callbacks: list[AddedCallback] = []
+        self._added_watch_keys: set[tuple[str, int]] = set()
 
     async def connect(self) -> None:
         if self._bus is not None and self._bus.connected:
@@ -165,6 +168,7 @@ class ModemManagerClient:
         if self._bus is not None:
             self._bus = None
             self._modem_path = None
+            self._added_watch_keys.clear()
 
         started_at = time.monotonic()
         try:
@@ -177,6 +181,7 @@ class ModemManagerClient:
             "client_connected",
             duration_seconds=time.monotonic() - started_at,
         )
+        await self._resubscribe_added_watchers_after_reconnect()
 
     async def disconnect(self) -> None:
         if self._bus is None:
@@ -185,6 +190,8 @@ class ModemManagerClient:
         self._bus.disconnect()
         self._bus = None
         self._modem_path = None
+        self._added_callbacks.clear()
+        self._added_watch_keys.clear()
         logger.info("client_disconnected")
 
     async def find_modem(self) -> str:
@@ -391,10 +398,17 @@ class ModemManagerClient:
             sms_path=sms_path,
         )
 
-    async def watch_added(self, callback: Callable[[str], Awaitable[None]]) -> None:
+    async def watch_added(self, callback: AddedCallback) -> None:
+        if callback not in self._added_callbacks:
+            self._added_callbacks.append(callback)
         modem_path = await self._ensure_modem_path()
-        modem_path, messaging = await self._get_messaging_interface(modem_path)
+        await self._subscribe_added_watch(modem_path, callback)
 
+    def _build_added_handler(
+        self,
+        modem_path: str,
+        callback: AddedCallback,
+    ) -> Callable[[str, bool], None]:
         def handle_added(sms_path: str, received: bool) -> None:
             logger.info(
                 "message_added_signal_received",
@@ -421,7 +435,26 @@ class ModemManagerClient:
 
             task.add_done_callback(handle_task_done)
 
-        messaging.on_added(handle_added)
+        return handle_added
+
+    async def _subscribe_added_watch(self, modem_path: str, callback: AddedCallback) -> None:
+        watch_key = (modem_path, id(callback))
+        if watch_key not in self._added_watch_keys:
+            modem_path, messaging = await self._get_messaging_interface(modem_path)
+            watch_key = (modem_path, id(callback))
+            if watch_key not in self._added_watch_keys:
+                messaging.on_added(self._build_added_handler(modem_path, callback))
+                self._added_watch_keys.add(watch_key)
+
+    async def _resubscribe_added_watchers(self, modem_path: str) -> None:
+        self._added_watch_keys.clear()
+        for callback in self._added_callbacks:
+            await self._subscribe_added_watch(modem_path, callback)
+
+    async def _resubscribe_added_watchers_after_reconnect(self) -> None:
+        if self._added_callbacks:
+            modem_path = await self.find_modem()
+            await self._resubscribe_added_watchers(modem_path)
 
     def _require_bus(self) -> MessageBus:
         if self._bus is None:
@@ -507,6 +540,7 @@ class ModemManagerClient:
                 logger.info("modem_path_stale", modem_path=object_path)
                 self._modem_path = None
                 refreshed_path = await self.find_modem()
+                await self._resubscribe_added_watchers(refreshed_path)
                 return await self._get_proxy_object(object_kind, refreshed_path)
             raise ModemManagerUnavailable(f"failed to query {object_kind} {object_path}") from exc
 
