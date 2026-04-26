@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from dbus_fast import DBusError
 
-from sms_gateway_v2.modem import MessageDeleteFailed, ModemManagerClient
+from sms_gateway_v2.modem import MessageDeleteFailed, ModemManagerClient, ModemManagerUnavailable
 
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
 SMS_PATH_1 = "/org/freedesktop/ModemManager1/SMS/1"
@@ -97,6 +97,28 @@ async def test_list_messages_handles_missing_timestamp_by_ordering_by_path(
     assert messages[1].timestamp is None
 
 
+@pytest.mark.parametrize("timestamp", ["", "not-a-timestamp"])
+async def test_list_messages_tolerates_blank_or_invalid_timestamp(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    timestamp: str,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="message",
+        timestamp=timestamp,
+    )
+    fake_messaging_proxy.messaging.get_messages.return_value = [SMS_PATH_1]
+    fake_bus.get_proxy_object.side_effect = [fake_messaging_proxy, sms]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    messages = await client.list_messages()
+
+    assert messages[0].timestamp is None
+
+
 @pytest.mark.parametrize(
     ("raw_pdu_type", "expected"),
     [
@@ -166,3 +188,21 @@ async def test_delete_message_wraps_dbus_error(
 
     with pytest.raises(MessageDeleteFailed, match="delete failed"):
         await client.delete_message(SMS_PATH_1)
+
+
+async def test_list_messages_wraps_messaging_lookup_failures(
+    fake_bus: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.ServiceUnknown", "ModemManager restarted")
+    fake_bus.introspect.side_effect = error
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(
+        ModemManagerUnavailable,
+        match=f"failed to query messaging object {MODEM_PATH}",
+    ) as exc:
+        await client.list_messages()
+
+    assert exc.value.__cause__ is error

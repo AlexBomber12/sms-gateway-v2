@@ -284,9 +284,12 @@ class ModemManagerClient:
         started_at = time.monotonic()
         modem_path = await self._ensure_modem_path()
         bus = self._require_bus()
-        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
-        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
-        modem_3gpp = cast(Modem3gppInterface, proxy.get_interface(MODEM_3GPP_INTERFACE))
+        try:
+            introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
+            proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
+            modem_3gpp = cast(Modem3gppInterface, proxy.get_interface(MODEM_3GPP_INTERFACE))
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable(f"failed to query modem object {modem_path}") from exc
 
         registration_value = await self._read_required(
             "RegistrationState",
@@ -369,9 +372,12 @@ class ModemManagerClient:
         return self._bus
 
     def _parse_timestamp(self, value: str | None) -> datetime | None:
-        if value is None:
+        if not value:
             return None
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
     def _decode_pdu_type(self, value: int | str) -> str:
         if isinstance(value, str):
@@ -393,9 +399,12 @@ class ModemManagerClient:
 
     async def _get_messaging_interface(self, modem_path: str) -> MessagingInterface:
         bus = self._require_bus()
-        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
-        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
-        return cast(MessagingInterface, proxy.get_interface(MESSAGING_INTERFACE))
+        try:
+            introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
+            proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
+            return cast(MessagingInterface, proxy.get_interface(MESSAGING_INTERFACE))
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable(f"failed to query messaging object {modem_path}") from exc
 
     async def _get_sms_interface(self, sms_path: str) -> SmsInterface:
         bus = self._require_bus()

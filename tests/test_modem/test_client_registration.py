@@ -3,8 +3,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from dbus_fast import DBusError
 
-from sms_gateway_v2.modem import ModemManagerClient, RegistrationState
+from sms_gateway_v2.modem import ModemManagerClient, ModemManagerUnavailable, RegistrationState
 
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
 
@@ -46,3 +47,21 @@ async def test_get_registration_state_maps_unknown_integer_to_unknown(
     client._modem_path = MODEM_PATH
 
     assert await client.get_registration_state() is RegistrationState.UNKNOWN
+
+
+async def test_get_registration_state_wraps_modem_lookup_failures(
+    fake_bus: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.ServiceUnknown", "ModemManager restarted")
+    fake_bus.introspect.side_effect = error
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(
+        ModemManagerUnavailable,
+        match=f"failed to query modem object {MODEM_PATH}",
+    ) as exc:
+        await client.get_registration_state()
+
+    assert exc.value.__cause__ is error
