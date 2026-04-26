@@ -68,3 +68,23 @@ async def test_double_connect_creates_only_one_bus(
 
     message_bus.assert_called_once()
     fake_bus.connect.assert_awaited_once()
+
+
+async def test_connect_after_dropped_bus_clears_cached_modem_path(
+    fake_bus: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_bus = MagicMock()
+    stale_bus.connected = False
+    message_bus = MagicMock(return_value=fake_bus)
+    monkeypatch.setattr("sms_gateway_v2.modem.client.MessageBus", message_bus)
+    client = ModemManagerClient()
+    client._bus = stale_bus
+    client._modem_path = "/org/freedesktop/ModemManager1/Modem/9"
+
+    await client.connect()
+
+    assert client._bus is fake_bus
+    assert client._modem_path is None
+    message_bus.assert_called_once()
+    fake_bus.connect.assert_awaited_once()

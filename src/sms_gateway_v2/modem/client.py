@@ -156,6 +156,10 @@ class ModemManagerClient:
         if self._bus is not None and self._bus.connected:
             return
 
+        if self._bus is not None:
+            self._bus = None
+            self._modem_path = None
+
         started_at = time.monotonic()
         try:
             bus = MessageBus(bus_type=BusType.SYSTEM)
