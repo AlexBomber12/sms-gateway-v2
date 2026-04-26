@@ -81,6 +81,27 @@ async def test_get_modem_info_handles_missing_sim_properties_gracefully(
     assert info.sim_operator_id is None
 
 
+async def test_get_modem_info_propagates_optional_sim_property_transport_failures(
+    fake_bus: MagicMock,
+    fake_modem_proxy: MagicMock,
+    fake_sim_proxy: MagicMock,
+) -> None:
+    configure_info_proxies(fake_bus, fake_modem_proxy, fake_sim_proxy)
+    error = DBusError("org.freedesktop.DBus.Error.ServiceUnknown", "ModemManager restarted")
+    fake_sim_proxy.sim.get_imsi.side_effect = error
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(
+        ModemManagerUnavailable,
+        match="failed to read optional modem property Imsi",
+    ) as exc:
+        await client.get_modem_info()
+
+    assert exc.value.__cause__ is error
+
+
 @pytest.mark.parametrize("missing_sim_path", ["/", ""])
 async def test_get_modem_info_handles_missing_sim_path_gracefully(
     fake_bus: MagicMock,

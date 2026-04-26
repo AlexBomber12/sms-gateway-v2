@@ -8,6 +8,7 @@ from dbus_fast import DBusError
 from sms_gateway_v2.modem import MessageDeleteFailed, ModemManagerClient, ModemManagerUnavailable
 
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
+REFRESHED_MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/1"
 SMS_PATH_1 = "/org/freedesktop/ModemManager1/SMS/1"
 SMS_PATH_2 = "/org/freedesktop/ModemManager1/SMS/2"
 SMS_PATH_10 = "/org/freedesktop/ModemManager1/SMS/10"
@@ -182,6 +183,60 @@ async def test_list_messages_tolerates_blank_or_invalid_timestamp(
     messages = await client.list_messages()
 
     assert messages[0].timestamp is None
+
+
+async def test_list_messages_propagates_timestamp_transport_failures(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.ServiceUnknown", "ModemManager restarted")
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="message",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    sms.sms.get_timestamp.side_effect = error
+    fake_messaging_proxy.messaging.get_messages.return_value = [SMS_PATH_1]
+    fake_bus.get_proxy_object.side_effect = [fake_messaging_proxy, sms]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(
+        ModemManagerUnavailable,
+        match="failed to read optional modem property Timestamp",
+    ) as exc:
+        await client.list_messages()
+
+    assert exc.value.__cause__ is error
+
+
+async def test_list_messages_refreshes_stale_cached_modem_path(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    stale_error = DBusError("org.freedesktop.DBus.Error.UnknownObject", "modem vanished")
+    object_manager = MagicMock()
+    object_manager.call_get_managed_objects = AsyncMock(
+        return_value={
+            REFRESHED_MODEM_PATH: {
+                "org.freedesktop.ModemManager1.Modem": {},
+            },
+        }
+    )
+    object_manager_proxy = MagicMock()
+    object_manager_proxy.get_interface.return_value = object_manager
+    fake_bus.introspect.side_effect = [stale_error, object(), object()]
+    fake_bus.get_proxy_object.side_effect = [object_manager_proxy, fake_messaging_proxy]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    messages = await client.list_messages()
+
+    assert messages == []
+    assert client._modem_path == REFRESHED_MODEM_PATH
+    fake_messaging_proxy.messaging.get_messages.assert_awaited_once_with()
 
 
 @pytest.mark.parametrize(
