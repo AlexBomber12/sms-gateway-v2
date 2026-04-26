@@ -22,6 +22,9 @@ Thumbs.db
 desktop.ini
 .env
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 instance/

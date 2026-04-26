@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 
 from sms_gateway_v2 import __version__
 from sms_gateway_v2.app import create_app
-from sms_gateway_v2.config import get_settings
 
 
 @pytest.fixture(autouse=True)
@@ -17,9 +16,7 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[No
     monkeypatch.setenv("HOST", "127.0.0.1")
     monkeypatch.setenv("PORT", "8091")
     monkeypatch.setenv("LOG_LEVEL", "INFO")
-    get_settings.cache_clear()
     yield
-    get_settings.cache_clear()
 
 
 def test_healthz_returns_ok() -> None:
