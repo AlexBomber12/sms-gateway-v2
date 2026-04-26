@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import ClassVar
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+    model_config = SettingsConfigDict(
         case_sensitive=False,
         env_file=".env",
         env_file_encoding="utf-8",

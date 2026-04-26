@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import textwrap
+
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import HTMLResponse
 
@@ -16,7 +18,8 @@ def healthz() -> dict[str, str]:
 
 @router.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    html = """
+    html = textwrap.dedent(
+        """\
     <!doctype html>
     <html lang="en">
       <head>
@@ -28,6 +31,7 @@ def index() -> HTMLResponse:
       </body>
     </html>
     """
+    )
     return HTMLResponse(content=html)
 
 

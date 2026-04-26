@@ -19,6 +19,7 @@ Sprint 1 of N: skeleton only, no application logic yet.
 ## Quick Start
 
 ```bash
+cp .env.example .env  # optional, defaults work without it
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
