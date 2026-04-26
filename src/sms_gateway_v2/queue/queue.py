@@ -158,6 +158,29 @@ class Queue:
             )
             return updated
 
+    async def recover_processing(self) -> int:
+        started_at = time.monotonic()
+        async with self._lock:
+            processing_paths = await asyncio.to_thread(
+                list_items_sorted,
+                self._dirs["processing"],
+            )
+            count = 0
+            for path in processing_paths:
+                await asyncio.to_thread(
+                    atomic_move,
+                    path.stem,
+                    self._dirs["processing"],
+                    self._dirs["pending"],
+                )
+                count += 1
+            logger.info(
+                "queue_recovery_completed",
+                count=count,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+            return count
+
     def _content_hash(self, sms: IncomingSms) -> str:
         if sms.timestamp is None:
             bucket = ""
