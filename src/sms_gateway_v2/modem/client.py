@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -104,6 +105,8 @@ class MessagingInterface(Protocol):
 
     async def call_delete(self, sms_path: str) -> None: ...
 
+    def on_added(self, callback: Callable[[str, bool], None]) -> None: ...
+
 
 class SmsInterface(Protocol):
     async def get_number(self) -> str: ...
@@ -119,6 +122,7 @@ class ModemManagerClient:
     def __init__(self) -> None:
         self._bus: MessageBus | None = None
         self._modem_path: str | None = None
+        self._watch_tasks: set[asyncio.Future[None]] = set()
 
     async def connect(self) -> None:
         if self._bus is not None and self._bus.connected:
@@ -307,6 +311,23 @@ class ModemManagerClient:
             modem_path=modem_path,
             sms_path=sms_path,
         )
+
+    async def watch_added(self, callback: Callable[[str], Awaitable[None]]) -> None:
+        modem_path = await self._ensure_modem_path()
+        messaging = await self._get_messaging_interface(modem_path)
+
+        def handle_added(sms_path: str, received: bool) -> None:
+            logger.info(
+                "message_added_signal_received",
+                modem_path=modem_path,
+                sms_path=sms_path,
+                received=received,
+            )
+            task = asyncio.ensure_future(callback(sms_path))
+            self._watch_tasks.add(task)
+            task.add_done_callback(self._watch_tasks.discard)
+
+        messaging.on_added(handle_added)
 
     def _require_bus(self) -> MessageBus:
         if self._bus is None:
