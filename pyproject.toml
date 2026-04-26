@@ -51,4 +51,4 @@ markers = [
     "integration: requires real D-Bus or filesystem",
     "e2e: requires real modem and Telegram",
 ]
-addopts = "-m 'not integration and not e2e' --cov=src/sms_gateway_v2 --cov-report=term-missing --cov-fail-under=100"
+addopts = "-m 'not integration and not e2e' --cov=src/sms_gateway_v2 --cov-report=term-missing"

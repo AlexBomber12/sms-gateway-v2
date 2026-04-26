@@ -7,7 +7,7 @@ import pytest
 from dbus_fast import DBusError
 
 from sms_gateway_v2.modem import ModemManagerClient
-from tests.test_modem.conftest import make_fake_messaging_proxy
+from tests.test_modem.factories import make_fake_messaging_proxy
 
 MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
