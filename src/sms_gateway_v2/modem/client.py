@@ -467,19 +467,29 @@ class ModemManagerClient:
                 self._added_watch_keys.add(watch_key)
 
     async def _resubscribe_added_watchers(self, modem_path: str) -> None:
-        self._added_watch_resubscribe_required = bool(self._added_callbacks)
         self._added_watch_keys.clear()
+        await self._subscribe_missing_added_watchers(modem_path)
+
+    async def _subscribe_missing_added_watchers(self, modem_path: str) -> None:
+        self._added_watch_resubscribe_required = bool(self._added_callbacks)
         for callback_key, callback in self._added_callbacks.items():
             await self._subscribe_added_watch(modem_path, callback_key, callback)
-        self._added_watch_resubscribe_required = False
+        self._added_watch_resubscribe_required = self._needs_added_watch_resubscribe()
 
     async def _resubscribe_added_watchers_after_reconnect(self) -> None:
         if self._added_watch_resubscribe_required:
             modem_path = await self.find_modem()
-            await self._resubscribe_added_watchers(modem_path)
+            await self._subscribe_missing_added_watchers(modem_path)
 
     def _needs_added_watch_resubscribe(self) -> bool:
-        return bool(self._added_callbacks) and not self._added_watch_keys
+        if not self._added_callbacks:
+            return False
+        if self._modem_path is None:
+            return True
+        return any(
+            (self._modem_path, callback_key) not in self._added_watch_keys
+            for callback_key in self._added_callbacks
+        )
 
     def _require_bus(self) -> MessageBus:
         if self._bus is None:

@@ -201,3 +201,39 @@ async def test_connect_retries_pending_watcher_subscription_on_connected_bus(
     assert client._added_watch_resubscribe_required is False
     fake_bus.connect.assert_not_awaited()
     fake_messaging_proxy.messaging.on_added.assert_called_once()
+
+
+async def test_connect_subscribes_missing_watcher_when_other_watchers_exist(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    object_manager = MagicMock()
+    object_manager.call_get_managed_objects = AsyncMock(
+        return_value={MODEM_PATH: {MODEM_INTERFACE: object()}}
+    )
+    object_manager_proxy = MagicMock()
+    object_manager_proxy.get_interface.return_value = object_manager
+    fake_bus.get_proxy_object.side_effect = [object_manager_proxy, fake_messaging_proxy]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def subscribed_callback(_sms_path: str) -> None:
+        return None
+
+    async def missing_callback(_sms_path: str) -> None:
+        return None
+
+    subscribed_key = client._callback_key(subscribed_callback)
+    missing_key = client._callback_key(missing_callback)
+    client._added_callbacks[subscribed_key] = subscribed_callback
+    client._added_callbacks[missing_key] = missing_callback
+    client._added_watch_keys.add((MODEM_PATH, subscribed_key))
+
+    await client.connect()
+
+    assert client._added_watch_resubscribe_required is False
+    assert (MODEM_PATH, subscribed_key) in client._added_watch_keys
+    assert (MODEM_PATH, missing_key) in client._added_watch_keys
+    fake_bus.connect.assert_not_awaited()
+    fake_messaging_proxy.messaging.on_added.assert_called_once()
