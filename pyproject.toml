@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.6,<3.0",
     "pydantic-settings>=2.2,<3.0",
     "structlog>=24.1,<26.0",
+    "dbus-fast>=2.21,<3.0",
 ]
 
 [project.optional-dependencies]
