@@ -164,3 +164,40 @@ async def test_connect_retries_watcher_resubscription_after_failed_reconnect(
     assert client._added_watch_resubscribe_required is False
     message_bus.assert_called_once()
     fake_messaging_proxy.messaging.on_added.assert_called_once()
+
+
+async def test_connect_retries_pending_watcher_subscription_on_connected_bus(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    empty_object_manager = MagicMock()
+    empty_object_manager.call_get_managed_objects = AsyncMock(return_value={})
+    empty_object_manager_proxy = MagicMock()
+    empty_object_manager_proxy.get_interface.return_value = empty_object_manager
+    object_manager = MagicMock()
+    object_manager.call_get_managed_objects = AsyncMock(
+        return_value={MODEM_PATH: {MODEM_INTERFACE: object()}}
+    )
+    object_manager_proxy = MagicMock()
+    object_manager_proxy.get_interface.return_value = object_manager
+    fake_bus.get_proxy_object.side_effect = [
+        empty_object_manager_proxy,
+        object_manager_proxy,
+        fake_messaging_proxy,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+
+    async def callback(_sms_path: str) -> None:
+        return None
+
+    with pytest.raises(ModemNotFound, match="no ModemManager modem object found"):
+        await client.watch_added(callback)
+
+    await client.connect()
+
+    assert client._bus is fake_bus
+    assert client._modem_path == MODEM_PATH
+    assert client._added_watch_resubscribe_required is False
+    fake_bus.connect.assert_not_awaited()
+    fake_messaging_proxy.messaging.on_added.assert_called_once()

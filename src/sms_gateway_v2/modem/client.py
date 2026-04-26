@@ -166,6 +166,8 @@ class ModemManagerClient:
 
     async def connect(self) -> None:
         if self._bus is not None and self._bus.connected:
+            if self._needs_added_watch_resubscribe():
+                self._added_watch_resubscribe_required = True
             await self._resubscribe_added_watchers_after_reconnect()
             return
 
@@ -186,7 +188,7 @@ class ModemManagerClient:
             "client_connected",
             duration_seconds=time.monotonic() - started_at,
         )
-        if self._added_callbacks and not self._added_watch_keys:
+        if self._needs_added_watch_resubscribe():
             self._added_watch_resubscribe_required = True
         await self._resubscribe_added_watchers_after_reconnect()
 
@@ -475,6 +477,9 @@ class ModemManagerClient:
         if self._added_watch_resubscribe_required:
             modem_path = await self.find_modem()
             await self._resubscribe_added_watchers(modem_path)
+
+    def _needs_added_watch_resubscribe(self) -> bool:
+        return bool(self._added_callbacks) and not self._added_watch_keys
 
     def _require_bus(self) -> MessageBus:
         if self._bus is None:
