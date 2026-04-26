@@ -226,7 +226,14 @@ class ModemManagerClient:
         await self._read_required("OperatorName", modem_3gpp.get_operator_name)
         await self._read_required("OperatorCode", modem_3gpp.get_operator_code)
         sim_path = await self._read_required("Sim", modem.get_sim)
-        sim = await self._get_sim_interface(sim_path)
+        sim_imsi: str | None = None
+        sim_operator_name: str | None = None
+        sim_operator_id: str | None = None
+        if sim_path not in {"", "/"}:
+            sim = await self._get_sim_interface(sim_path)
+            sim_imsi = await self._read_optional(sim.get_imsi)
+            sim_operator_name = await self._read_optional(sim.get_operator_name)
+            sim_operator_id = await self._read_optional(sim.get_operator_identifier)
 
         info = ModemInfo(
             object_path=modem_path,
@@ -237,9 +244,9 @@ class ModemManagerClient:
             state=state,
             registration=RegistrationState.from_dbus_value(registration_value),
             signal=SignalQuality(percent=signal_percent, recent=signal_recent),
-            sim_imsi=await self._read_optional(sim.get_imsi),
-            sim_operator_name=await self._read_optional(sim.get_operator_name),
-            sim_operator_id=await self._read_optional(sim.get_operator_identifier),
+            sim_imsi=sim_imsi,
+            sim_operator_name=sim_operator_name,
+            sim_operator_id=sim_operator_id,
         )
         logger.info(
             "modem_info_read",
@@ -252,9 +259,12 @@ class ModemManagerClient:
         started_at = time.monotonic()
         modem_path = await self._ensure_modem_path()
         bus = self._require_bus()
-        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
-        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
-        modem = cast(ModemInterface, proxy.get_interface(MODEM_INTERFACE))
+        try:
+            introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
+            proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
+            modem = cast(ModemInterface, proxy.get_interface(MODEM_INTERFACE))
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable(f"failed to query modem object {modem_path}") from exc
 
         signal_percent, signal_recent = await self._read_required(
             "SignalQuality",

@@ -81,6 +81,28 @@ async def test_get_modem_info_handles_missing_sim_properties_gracefully(
     assert info.sim_operator_id is None
 
 
+@pytest.mark.parametrize("missing_sim_path", ["/", ""])
+async def test_get_modem_info_handles_missing_sim_path_gracefully(
+    fake_bus: MagicMock,
+    fake_modem_proxy: MagicMock,
+    fake_modem_props: MagicMock,
+    fake_sim_proxy: MagicMock,
+    missing_sim_path: str,
+) -> None:
+    configure_info_proxies(fake_bus, fake_modem_proxy, fake_sim_proxy)
+    fake_modem_props.get_sim.return_value = missing_sim_path
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    info = await client.get_modem_info()
+
+    assert info.sim_imsi is None
+    assert info.sim_operator_name is None
+    assert info.sim_operator_id is None
+    fake_sim_proxy.get_interface.assert_not_called()
+
+
 async def test_get_modem_info_auto_calls_find_modem_when_path_is_not_cached(
     fake_bus: MagicMock,
     fake_modem_proxy: MagicMock,
