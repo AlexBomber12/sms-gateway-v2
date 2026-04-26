@@ -6,10 +6,13 @@ from sms_gateway_v2.queue.exceptions import (
     QueueCorrupted,
     QueueError,
 )
+from sms_gateway_v2.queue.models import ItemStatus, QueueItem
 
 __all__ = [
     "DuplicateMessage",
     "ItemNotFound",
+    "ItemStatus",
     "QueueCorrupted",
     "QueueError",
+    "QueueItem",
 ]
