@@ -43,6 +43,21 @@ MODEM_3GPP_INTERFACE = "org.freedesktop.ModemManager1.Modem.Modem3gpp"
 MESSAGING_INTERFACE = "org.freedesktop.ModemManager1.Modem.Messaging"
 SMS_INTERFACE = "org.freedesktop.ModemManager1.Sms"
 SIM_INTERFACE = "org.freedesktop.ModemManager1.Sim"
+MODEM_STATES = {
+    -1: "failed",
+    0: "unknown",
+    1: "initializing",
+    2: "locked",
+    3: "disabled",
+    4: "disabling",
+    5: "enabling",
+    6: "enabled",
+    7: "searching",
+    8: "registered",
+    9: "disconnecting",
+    10: "connecting",
+    11: "connected",
+}
 SMS_PDU_TYPES = {
     0: "unknown",
     1: "deliver",
@@ -89,7 +104,7 @@ class ModemInterface(Protocol):
 
     async def get_primary_port(self) -> str: ...
 
-    async def get_state(self) -> str: ...
+    async def get_state(self) -> int | str: ...
 
     async def get_signal_quality(self) -> tuple[int, bool]: ...
 
@@ -214,7 +229,7 @@ class ModemManagerClient:
             modem.get_equipment_identifier,
         )
         device = await self._read_required("PrimaryPort", modem.get_primary_port)
-        state = await self._read_required("State", modem.get_state)
+        state = self._decode_modem_state(await self._read_required("State", modem.get_state))
         signal_percent, signal_recent = await self._read_required(
             "SignalQuality",
             modem.get_signal_quality,
@@ -384,6 +399,11 @@ class ModemManagerClient:
             return value
         return SMS_PDU_TYPES.get(value, "unknown")
 
+    def _decode_modem_state(self, value: int | str) -> str:
+        if isinstance(value, str):
+            return value
+        return MODEM_STATES.get(value, "unknown")
+
     async def _ensure_modem_path(self) -> str:
         if self._modem_path is None:
             await self.find_modem()
@@ -408,9 +428,12 @@ class ModemManagerClient:
 
     async def _get_sms_interface(self, sms_path: str) -> SmsInterface:
         bus = self._require_bus()
-        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, sms_path)
-        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, sms_path, introspection)
-        return cast(SmsInterface, proxy.get_interface(SMS_INTERFACE))
+        try:
+            introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, sms_path)
+            proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, sms_path, introspection)
+            return cast(SmsInterface, proxy.get_interface(SMS_INTERFACE))
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable(f"failed to query SMS object {sms_path}") from exc
 
     async def _read_required(
         self,

@@ -206,3 +206,24 @@ async def test_list_messages_wraps_messaging_lookup_failures(
         await client.list_messages()
 
     assert exc.value.__cause__ is error
+
+
+async def test_list_messages_wraps_sms_lookup_failures(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.UnknownObject", "SMS vanished")
+    fake_messaging_proxy.messaging.get_messages.return_value = [SMS_PATH_1]
+    fake_bus.introspect.side_effect = [object(), error]
+    fake_bus.get_proxy_object.return_value = fake_messaging_proxy
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(
+        ModemManagerUnavailable,
+        match=f"failed to query SMS object {SMS_PATH_1}",
+    ) as exc:
+        await client.list_messages()
+
+    assert exc.value.__cause__ is error

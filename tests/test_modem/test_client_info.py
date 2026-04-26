@@ -143,6 +143,45 @@ async def test_get_modem_info_builds_signal_quality_from_dbus_tuple(
     assert info.signal.recent is False
 
 
+@pytest.mark.parametrize(
+    ("raw_state", "expected"),
+    [
+        (-1, "failed"),
+        (0, "unknown"),
+        (1, "initializing"),
+        (2, "locked"),
+        (3, "disabled"),
+        (4, "disabling"),
+        (5, "enabling"),
+        (6, "enabled"),
+        (7, "searching"),
+        (8, "registered"),
+        (9, "disconnecting"),
+        (10, "connecting"),
+        (11, "connected"),
+        (999, "unknown"),
+        ("registered", "registered"),
+    ],
+)
+async def test_get_modem_info_decodes_modem_state(
+    fake_bus: MagicMock,
+    fake_modem_proxy: MagicMock,
+    fake_modem_props: MagicMock,
+    fake_sim_proxy: MagicMock,
+    raw_state: int | str,
+    expected: str,
+) -> None:
+    configure_info_proxies(fake_bus, fake_modem_proxy, fake_sim_proxy)
+    fake_modem_props.get_state.return_value = raw_state
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    info = await client.get_modem_info()
+
+    assert info.state == expected
+
+
 async def test_get_modem_info_wraps_required_property_failures(
     fake_bus: MagicMock,
     fake_modem_proxy: MagicMock,
