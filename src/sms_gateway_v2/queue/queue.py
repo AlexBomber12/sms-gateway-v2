@@ -3,14 +3,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
 
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue.dedup import DedupStore
-from sms_gateway_v2.queue.exceptions import DuplicateMessage, QueueCorrupted
+from sms_gateway_v2.queue.exceptions import DuplicateMessage, ItemNotFound, QueueCorrupted
 from sms_gateway_v2.queue.models import ItemStatus, QueueItem
 from sms_gateway_v2.queue.paths import (
     atomic_move,
@@ -18,6 +18,7 @@ from sms_gateway_v2.queue.paths import (
     ensure_state_dirs,
     list_items_sorted,
     load_item,
+    save_item,
 )
 
 logger = structlog.get_logger(__name__)
@@ -115,6 +116,48 @@ class Queue:
             logger.info("queue_claim_empty", elapsed_ms=_elapsed_ms(started_at))
             return None
 
+    async def mark_sent(self, item: QueueItem) -> None:
+        started_at = time.monotonic()
+        async with self._lock:
+            await self._move_from_processing(item, self._dirs["sent"])
+            await self._dedup.update_status(self._content_hash(item.sms), ItemStatus.SENT)
+            logger.info(
+                "queue_item_sent",
+                item_id=item.id,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+
+    async def mark_failed(self, item: QueueItem) -> None:
+        started_at = time.monotonic()
+        async with self._lock:
+            await self._move_from_processing(item, self._dirs["failed"])
+            await self._dedup.update_status(self._content_hash(item.sms), ItemStatus.FAILED)
+            logger.info(
+                "queue_item_failed",
+                item_id=item.id,
+                attempts=item.attempts,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+
+    async def update_attempt(self, item: QueueItem, *, next_retry_at: datetime) -> QueueItem:
+        started_at = time.monotonic()
+        updated = item.model_copy(
+            update={
+                "attempts": item.attempts + 1,
+                "last_attempt_at": datetime.now(UTC),
+                "next_retry_at": next_retry_at,
+            }
+        )
+        async with self._lock:
+            await asyncio.to_thread(save_item, updated, self._dirs["processing"])
+            logger.info(
+                "queue_item_attempt_updated",
+                item_id=item.id,
+                attempts=updated.attempts,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+            return updated
+
     def _content_hash(self, sms: IncomingSms) -> str:
         if sms.timestamp is None:
             bucket = ""
@@ -124,6 +167,17 @@ class Queue:
             bucket = datetime.fromtimestamp(bucket_seconds, tz=sms.timestamp.tzinfo).isoformat()
         payload = f"{sms.number}|{sms.text}|{bucket}"
         return hashlib.sha256(payload.encode()).hexdigest()
+
+    async def _move_from_processing(self, item: QueueItem, dest_dir: Path) -> None:
+        try:
+            await asyncio.to_thread(
+                atomic_move,
+                item.id,
+                self._dirs["processing"],
+                dest_dir,
+            )
+        except FileNotFoundError as exc:
+            raise ItemNotFound(f"queue item not found in processing: {item.id}") from exc
 
 
 def _delete_pending_item(path: Path) -> None:
