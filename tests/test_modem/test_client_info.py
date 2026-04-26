@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dbus_fast import DBusError
+from dbus_fast.errors import InterfaceNotFoundError
 
 from sms_gateway_v2.modem import (
     ModemError,
@@ -234,6 +235,34 @@ async def test_get_modem_info_wraps_modem_lookup_failures(
     with pytest.raises(
         ModemManagerUnavailable,
         match=f"failed to query modem object {MODEM_PATH}",
+    ) as exc:
+        await client.get_modem_info()
+
+    assert exc.value.__cause__ is error
+
+
+async def test_get_modem_info_wraps_modem_interface_lookup_failures(
+    fake_bus: MagicMock,
+    fake_modem_proxy: MagicMock,
+    fake_modem_props: MagicMock,
+    fake_sim_proxy: MagicMock,
+) -> None:
+    configure_info_proxies(fake_bus, fake_modem_proxy, fake_sim_proxy)
+    error = InterfaceNotFoundError("org.freedesktop.ModemManager1.Modem.Modem3gpp")
+
+    def get_interface(interface_name: str) -> object:
+        if interface_name == "org.freedesktop.ModemManager1.Modem.Modem3gpp":
+            raise error
+        return fake_modem_props
+
+    fake_modem_proxy.get_interface.side_effect = get_interface
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(
+        ModemManagerUnavailable,
+        match="failed to query modem object interface",
     ) as exc:
         await client.get_modem_info()
 

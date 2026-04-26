@@ -229,8 +229,14 @@ class ModemManagerClient:
             modem_path,
             refresh_cached_modem=True,
         )
-        modem = cast(ModemInterface, proxy.get_interface(MODEM_INTERFACE))
-        modem_3gpp = cast(Modem3gppInterface, proxy.get_interface(MODEM_3GPP_INTERFACE))
+        modem = cast(
+            ModemInterface,
+            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_INTERFACE),
+        )
+        modem_3gpp = cast(
+            Modem3gppInterface,
+            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_3GPP_INTERFACE),
+        )
 
         manufacturer = await self._read_required("Manufacturer", modem.get_manufacturer)
         model = await self._read_required("Model", modem.get_model)
@@ -291,7 +297,10 @@ class ModemManagerClient:
             modem_path,
             refresh_cached_modem=True,
         )
-        modem = cast(ModemInterface, proxy.get_interface(MODEM_INTERFACE))
+        modem = cast(
+            ModemInterface,
+            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_INTERFACE),
+        )
 
         signal_percent, signal_recent = await self._read_required(
             "SignalQuality",
@@ -315,7 +324,10 @@ class ModemManagerClient:
             modem_path,
             refresh_cached_modem=True,
         )
-        modem_3gpp = cast(Modem3gppInterface, proxy.get_interface(MODEM_3GPP_INTERFACE))
+        modem_3gpp = cast(
+            Modem3gppInterface,
+            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_3GPP_INTERFACE),
+        )
 
         registration_value = await self._read_required(
             "RegistrationState",
@@ -451,7 +463,10 @@ class ModemManagerClient:
 
     async def _get_sim_interface(self, sim_path: str) -> SimInterface:
         _, proxy = await self._get_proxy_object("SIM object", sim_path)
-        return cast(SimInterface, proxy.get_interface(SIM_INTERFACE))
+        return cast(
+            SimInterface,
+            self._get_proxy_interface(proxy, "SIM object", sim_path, SIM_INTERFACE),
+        )
 
     async def _get_messaging_interface(
         self,
@@ -462,11 +477,17 @@ class ModemManagerClient:
             modem_path,
             refresh_cached_modem=True,
         )
-        return modem_path, cast(MessagingInterface, proxy.get_interface(MESSAGING_INTERFACE))
+        return modem_path, cast(
+            MessagingInterface,
+            self._get_proxy_interface(proxy, "messaging object", modem_path, MESSAGING_INTERFACE),
+        )
 
     async def _get_sms_interface(self, sms_path: str) -> SmsInterface:
         _, proxy = await self._get_proxy_object("SMS object", sms_path)
-        return cast(SmsInterface, proxy.get_interface(SMS_INTERFACE))
+        return cast(
+            SmsInterface,
+            self._get_proxy_interface(proxy, "SMS object", sms_path, SMS_INTERFACE),
+        )
 
     async def _get_proxy_object(
         self,
@@ -499,6 +520,20 @@ class ModemManagerClient:
 
     def _is_unknown_object_error(self, exc: BaseException) -> bool:
         return isinstance(exc, DBusError) and exc.type == UNKNOWN_OBJECT_ERROR
+
+    def _get_proxy_interface(
+        self,
+        proxy: ProxyObject,
+        object_kind: str,
+        object_path: str,
+        interface_name: str,
+    ) -> object:
+        try:
+            return proxy.get_interface(interface_name)
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable(
+                f"failed to query {object_kind} interface {interface_name} on {object_path}"
+            ) from exc
 
     async def _read_required(
         self,
