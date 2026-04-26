@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import structlog
@@ -181,6 +181,65 @@ class Queue:
             )
             return count
 
+    async def requeue_failed(self, *, max_age_days: int) -> int:
+        started_at = time.monotonic()
+        cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+        async with self._lock:
+            failed_paths = await asyncio.to_thread(list_items_sorted, self._dirs["failed"])
+            count = 0
+            for path in failed_paths:
+                item = await asyncio.to_thread(load_item, path)
+                if item.first_seen_at >= cutoff:
+                    await asyncio.to_thread(
+                        atomic_move,
+                        item.id,
+                        self._dirs["failed"],
+                        self._dirs["pending"],
+                    )
+                    await self._dedup.update_status(
+                        self._content_hash(item.sms),
+                        ItemStatus.PENDING,
+                    )
+                    count += 1
+            logger.info(
+                "queue_failed_requeued",
+                count=count,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+            return count
+
+    async def cleanup_sent(self, *, max_age_days: int) -> int:
+        started_at = time.monotonic()
+        async with self._lock:
+            count = await asyncio.to_thread(
+                _remove_files_older_than,
+                self._dirs["sent"],
+                max_age_days,
+            )
+            await self._dedup.purge_older_than(ItemStatus.SENT, max_age_days)
+            logger.info(
+                "queue_sent_cleaned",
+                count=count,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+            return count
+
+    async def cleanup_failed(self, *, max_age_days: int) -> int:
+        started_at = time.monotonic()
+        async with self._lock:
+            count = await asyncio.to_thread(
+                _remove_files_older_than,
+                self._dirs["failed"],
+                max_age_days,
+            )
+            await self._dedup.purge_older_than(ItemStatus.FAILED, max_age_days)
+            logger.info(
+                "queue_failed_cleaned",
+                count=count,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+            return count
+
     def _content_hash(self, sms: IncomingSms) -> str:
         if sms.timestamp is None:
             bucket = ""
@@ -210,3 +269,13 @@ def _delete_pending_item(path: Path) -> None:
 
 def _elapsed_ms(started_at: float) -> int:
     return int((time.monotonic() - started_at) * 1000)
+
+
+def _remove_files_older_than(directory: Path, max_age_days: int) -> int:
+    cutoff = time.time() - (max_age_days * 86_400)
+    count = 0
+    for path in list_items_sorted(directory):
+        if path.stat().st_mtime < cutoff:
+            path.unlink()
+            count += 1
+    return count
