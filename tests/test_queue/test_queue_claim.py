@@ -101,3 +101,20 @@ async def test_claim_next_updates_dedup_status_to_processing(
     assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
         ItemStatus.PROCESSING.value
     )
+
+
+async def test_claim_next_repairs_missing_dedup_row_for_pending_item(
+    queue: Queue,
+    sample_sms: IncomingSms,
+    state_dir: Path,
+) -> None:
+    item = make_item(sample_sms, "1714149693000-0123456789abcdef0123456789abcdef")
+    atomic_write_json(item, queue._dirs)
+
+    claimed = await queue.claim_next()
+
+    assert claimed == item
+    assert (queue._dirs["processing"] / f"{item.id}.json").exists()
+    assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
+        ItemStatus.PROCESSING.value
+    )

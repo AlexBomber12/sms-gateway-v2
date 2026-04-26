@@ -37,8 +37,9 @@ class Queue:
             if self._dirs:
                 return
 
-            self._dirs = await asyncio.to_thread(ensure_state_dirs, self._state_dir)
+            dirs = await asyncio.to_thread(ensure_state_dirs, self._state_dir)
             await self._dedup.initialize()
+            self._dirs = dirs
 
     async def close(self) -> None:
         await self._dedup.close()
@@ -114,7 +115,17 @@ class Queue:
                     self._dirs["pending"],
                     self._dirs["processing"],
                 )
-                await self._dedup.update_status(self._content_hash(item.sms), ItemStatus.PROCESSING)
+                content_hash = self._content_hash(item.sms)
+                try:
+                    await self._dedup.update_status(content_hash, ItemStatus.PROCESSING)
+                except ItemNotFound:
+                    await self._dedup.record_new(content_hash, item.id)
+                    await self._dedup.update_status(content_hash, ItemStatus.PROCESSING)
+                    logger.info(
+                        "queue_item_dedup_repaired",
+                        item_id=item.id,
+                        elapsed_ms=_elapsed_ms(started_at),
+                    )
                 logger.info(
                     "queue_item_claimed",
                     item_id=item.id,

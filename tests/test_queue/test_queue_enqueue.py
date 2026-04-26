@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
+
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue import DuplicateMessage, Queue, QueueItem
 
@@ -11,6 +13,20 @@ async def test_queue_initialize_is_idempotent(queue: Queue) -> None:
     await queue.initialize()
 
     assert queue._dirs["pending"].is_dir()
+
+
+async def test_queue_initialize_retries_when_dedup_initialize_fails(state_dir: Path) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+    queue._dedup.initialize = AsyncMock(side_effect=[RuntimeError("boom"), None])
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await queue.initialize()
+
+    assert queue._dirs == {}
+    await queue.initialize()
+
+    assert queue._dirs["pending"].is_dir()
+    assert queue._dedup.initialize.await_count == 2
 
 
 async def test_enqueue_new_sms_returns_item_and_creates_pending_file(
