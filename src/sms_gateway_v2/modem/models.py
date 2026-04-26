@@ -14,6 +14,12 @@ class RegistrationState(StrEnum):
     DENIED = "denied"
     HOME = "home"
     ROAMING = "roaming"
+    HOME_SMS_ONLY = "home_sms_only"
+    ROAMING_SMS_ONLY = "roaming_sms_only"
+    EMERGENCY_ONLY = "emergency_only"
+    HOME_CSFB_NOT_PREFERRED = "home_csfb_not_preferred"
+    ROAMING_CSFB_NOT_PREFERRED = "roaming_csfb_not_preferred"
+    ATTACHED_RLOS = "attached_rlos"
 
     @classmethod
     def from_dbus_value(cls, value: int) -> RegistrationState:
@@ -24,6 +30,12 @@ class RegistrationState(StrEnum):
             3: cls.DENIED,
             4: cls.UNKNOWN,
             5: cls.ROAMING,
+            6: cls.HOME_SMS_ONLY,
+            7: cls.ROAMING_SMS_ONLY,
+            8: cls.EMERGENCY_ONLY,
+            9: cls.HOME_CSFB_NOT_PREFERRED,
+            10: cls.ROAMING_CSFB_NOT_PREFERRED,
+            11: cls.ATTACHED_RLOS,
         }
         return states.get(value, cls.UNKNOWN)
 

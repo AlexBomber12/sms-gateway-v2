@@ -17,6 +17,12 @@ from sms_gateway_v2.modem import IncomingSms, RegistrationState, SignalQuality
         (3, RegistrationState.DENIED),
         (4, RegistrationState.UNKNOWN),
         (5, RegistrationState.ROAMING),
+        (6, RegistrationState.HOME_SMS_ONLY),
+        (7, RegistrationState.ROAMING_SMS_ONLY),
+        (8, RegistrationState.EMERGENCY_ONLY),
+        (9, RegistrationState.HOME_CSFB_NOT_PREFERRED),
+        (10, RegistrationState.ROAMING_CSFB_NOT_PREFERRED),
+        (11, RegistrationState.ATTACHED_RLOS),
     ],
 )
 def test_registration_state_maps_known_dbus_values(
@@ -26,7 +32,7 @@ def test_registration_state_maps_known_dbus_values(
     assert RegistrationState.from_dbus_value(dbus_value) is expected
 
 
-@pytest.mark.parametrize("dbus_value", [-1, 6, 999])
+@pytest.mark.parametrize("dbus_value", [-1, 12, 999])
 def test_registration_state_maps_unknown_dbus_values_to_unknown(dbus_value: int) -> None:
     assert RegistrationState.from_dbus_value(dbus_value) is RegistrationState.UNKNOWN
 

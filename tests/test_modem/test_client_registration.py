@@ -19,6 +19,12 @@ MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
         (3, RegistrationState.DENIED),
         (4, RegistrationState.UNKNOWN),
         (5, RegistrationState.ROAMING),
+        (6, RegistrationState.HOME_SMS_ONLY),
+        (7, RegistrationState.ROAMING_SMS_ONLY),
+        (8, RegistrationState.EMERGENCY_ONLY),
+        (9, RegistrationState.HOME_CSFB_NOT_PREFERRED),
+        (10, RegistrationState.ROAMING_CSFB_NOT_PREFERRED),
+        (11, RegistrationState.ATTACHED_RLOS),
     ],
 )
 async def test_get_registration_state_maps_known_values(
