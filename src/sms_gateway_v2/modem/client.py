@@ -413,9 +413,12 @@ class ModemManagerClient:
 
     async def _get_sim_interface(self, sim_path: str) -> SimInterface:
         bus = self._require_bus()
-        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, sim_path)
-        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, sim_path, introspection)
-        return cast(SimInterface, proxy.get_interface(SIM_INTERFACE))
+        try:
+            introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, sim_path)
+            proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, sim_path, introspection)
+            return cast(SimInterface, proxy.get_interface(SIM_INTERFACE))
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable(f"failed to query SIM object {sim_path}") from exc
 
     async def _get_messaging_interface(self, modem_path: str) -> MessagingInterface:
         bus = self._require_bus()

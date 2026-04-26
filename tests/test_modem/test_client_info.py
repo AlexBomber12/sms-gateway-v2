@@ -217,3 +217,24 @@ async def test_get_modem_info_wraps_modem_lookup_failures(
         await client.get_modem_info()
 
     assert exc.value.__cause__ is error
+
+
+async def test_get_modem_info_wraps_sim_lookup_failures(
+    fake_bus: MagicMock,
+    fake_modem_proxy: MagicMock,
+    fake_sim_proxy: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.UnknownObject", "SIM vanished")
+    fake_bus.introspect.side_effect = [object(), error]
+    configure_info_proxies(fake_bus, fake_modem_proxy, fake_sim_proxy)
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(
+        ModemManagerUnavailable,
+        match=f"failed to query SIM object {SIM_PATH}",
+    ) as exc:
+        await client.get_modem_info()
+
+    assert exc.value.__cause__ is error
