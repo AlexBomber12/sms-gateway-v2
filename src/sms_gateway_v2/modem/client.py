@@ -152,14 +152,19 @@ class ModemManagerClient:
     async def find_modem(self) -> str:
         bus = self._require_bus()
         started_at = time.monotonic()
-        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, MODEM_MANAGER_OBJECT_PATH)
-        proxy = bus.get_proxy_object(
-            MODEM_MANAGER_BUS_NAME,
-            MODEM_MANAGER_OBJECT_PATH,
-            introspection,
-        )
-        object_manager = cast(ObjectManagerInterface, proxy.get_interface(OBJECT_MANAGER_INTERFACE))
-        managed_objects: ManagedObjects = await object_manager.call_get_managed_objects()
+        try:
+            introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, MODEM_MANAGER_OBJECT_PATH)
+            proxy = bus.get_proxy_object(
+                MODEM_MANAGER_BUS_NAME,
+                MODEM_MANAGER_OBJECT_PATH,
+                introspection,
+            )
+            object_manager = cast(
+                ObjectManagerInterface, proxy.get_interface(OBJECT_MANAGER_INTERFACE)
+            )
+            managed_objects: ManagedObjects = await object_manager.call_get_managed_objects()
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable("failed to query ModemManager objects") from exc
 
         for object_path, interfaces in managed_objects.items():
             if MODEM_INTERFACE in interfaces:
@@ -323,6 +328,8 @@ class ModemManagerClient:
                 sms_path=sms_path,
                 received=received,
             )
+            if not received:
+                return
             task = asyncio.ensure_future(callback(sms_path))
             self._watch_tasks.add(task)
             task.add_done_callback(self._watch_tasks.discard)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dbus_fast import DBusError
 
 from sms_gateway_v2.modem import ModemManagerClient, ModemManagerUnavailable, ModemNotFound
 
@@ -84,3 +85,19 @@ async def test_find_modem_without_prior_connect_raises_modem_manager_unavailable
 
     with pytest.raises(ModemManagerUnavailable, match="not connected to system D-Bus"):
         await client.find_modem()
+
+
+async def test_find_modem_wraps_dbus_discovery_errors(
+    fake_bus: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.ServiceUnknown", "ModemManager missing")
+    fake_bus.introspect.side_effect = error
+    client = ModemManagerClient()
+    client._bus = fake_bus
+
+    with pytest.raises(
+        ModemManagerUnavailable, match="failed to query ModemManager objects"
+    ) as exc:
+        await client.find_modem()
+
+    assert exc.value.__cause__ is error
