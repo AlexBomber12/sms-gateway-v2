@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from dbus_fast import DBusError
 
-from sms_gateway_v2.modem import ModemError, ModemInfo, ModemManagerClient, RegistrationState
+from sms_gateway_v2.modem import (
+    ModemError,
+    ModemInfo,
+    ModemManagerClient,
+    ModemManagerUnavailable,
+    RegistrationState,
+)
 
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
 SIM_PATH = "/org/freedesktop/ModemManager1/SIM/0"
@@ -132,3 +138,21 @@ async def test_get_modem_info_wraps_required_property_failures(
 
     with pytest.raises(ModemError, match="failed to read required modem property Manufacturer"):
         await client.get_modem_info()
+
+
+async def test_get_modem_info_wraps_modem_lookup_failures(
+    fake_bus: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.ServiceUnknown", "ModemManager restarted")
+    fake_bus.introspect.side_effect = error
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(
+        ModemManagerUnavailable,
+        match=f"failed to query modem object {MODEM_PATH}",
+    ) as exc:
+        await client.get_modem_info()
+
+    assert exc.value.__cause__ is error

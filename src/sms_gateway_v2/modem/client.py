@@ -43,6 +43,18 @@ MODEM_3GPP_INTERFACE = "org.freedesktop.ModemManager1.Modem.Modem3gpp"
 MESSAGING_INTERFACE = "org.freedesktop.ModemManager1.Modem.Messaging"
 SMS_INTERFACE = "org.freedesktop.ModemManager1.Sms"
 SIM_INTERFACE = "org.freedesktop.ModemManager1.Sim"
+SMS_PDU_TYPES = {
+    0: "unknown",
+    1: "deliver",
+    2: "submit",
+    3: "status-report",
+    32: "cdma-deliver",
+    33: "cdma-submit",
+    34: "cdma-cancellation",
+    35: "cdma-delivery-acknowledgement",
+    36: "cdma-user-acknowledgement",
+    37: "cdma-read-acknowledgement",
+}
 DBUS_OPERATION_ERRORS = (
     OSError,
     AuthError,
@@ -115,7 +127,7 @@ class SmsInterface(Protocol):
 
     async def get_timestamp(self) -> str: ...
 
-    async def get_pdu_type(self) -> str: ...
+    async def get_pdu_type(self) -> int | str: ...
 
 
 class ModemManagerClient:
@@ -187,10 +199,13 @@ class ModemManagerClient:
         modem_path = await self._ensure_modem_path()
 
         bus = self._require_bus()
-        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
-        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
-        modem = cast(ModemInterface, proxy.get_interface(MODEM_INTERFACE))
-        modem_3gpp = cast(Modem3gppInterface, proxy.get_interface(MODEM_3GPP_INTERFACE))
+        try:
+            introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
+            proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
+            modem = cast(ModemInterface, proxy.get_interface(MODEM_INTERFACE))
+            modem_3gpp = cast(Modem3gppInterface, proxy.get_interface(MODEM_3GPP_INTERFACE))
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable(f"failed to query modem object {modem_path}") from exc
 
         manufacturer = await self._read_required("Manufacturer", modem.get_manufacturer)
         model = await self._read_required("Model", modem.get_model)
@@ -289,7 +304,9 @@ class ModemManagerClient:
                 number=await self._read_required("Number", sms.get_number),
                 text=await self._read_required("Text", sms.get_text),
                 timestamp=self._parse_timestamp(await self._read_optional(sms.get_timestamp)),
-                pdu_type=await self._read_required("PduType", sms.get_pdu_type),
+                pdu_type=self._decode_pdu_type(
+                    await self._read_required("PduType", sms.get_pdu_type)
+                ),
             )
             messages.append(message)
             logger.info(
@@ -345,6 +362,11 @@ class ModemManagerClient:
         if value is None:
             return None
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    def _decode_pdu_type(self, value: int | str) -> str:
+        if isinstance(value, str):
+            return value
+        return SMS_PDU_TYPES.get(value, "unknown")
 
     async def _ensure_modem_path(self) -> str:
         if self._modem_path is None:
