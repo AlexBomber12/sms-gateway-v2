@@ -351,10 +351,7 @@ class ModemManagerClient:
                 sms_path=sms_path,
             )
 
-        if all(message.timestamp is not None for message in messages):
-            messages.sort(key=lambda message: cast(datetime, message.timestamp))
-        else:
-            messages.sort(key=lambda message: message.object_path)
+        messages.sort(key=self._message_sort_key)
         return messages
 
     async def delete_message(self, sms_path: str) -> None:
@@ -414,6 +411,14 @@ class ModemManagerClient:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
+
+    def _message_sort_key(self, message: IncomingSms) -> tuple[int, float, str]:
+        if message.timestamp is not None:
+            return (0, message.timestamp.timestamp(), message.object_path)
+
+        suffix = message.object_path.rsplit("/", maxsplit=1)[-1]
+        path_index = int(suffix) if suffix.isdecimal() else -1
+        return (1, float(path_index), message.object_path)
 
     def _decode_pdu_type(self, value: int | str) -> str:
         if isinstance(value, str):

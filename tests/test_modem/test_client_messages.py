@@ -10,6 +10,7 @@ from sms_gateway_v2.modem import MessageDeleteFailed, ModemManagerClient, ModemM
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
 SMS_PATH_1 = "/org/freedesktop/ModemManager1/SMS/1"
 SMS_PATH_2 = "/org/freedesktop/ModemManager1/SMS/2"
+SMS_PATH_10 = "/org/freedesktop/ModemManager1/SMS/10"
 
 
 def make_sms_proxy(
@@ -95,6 +96,70 @@ async def test_list_messages_handles_missing_timestamp_by_ordering_by_path(
 
     assert [message.object_path for message in messages] == [SMS_PATH_1, SMS_PATH_2]
     assert messages[1].timestamp is None
+
+
+async def test_list_messages_preserves_timestamp_order_when_some_timestamps_are_missing(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    sms_without_timestamp = make_sms_proxy(
+        number="+15550000010",
+        text="without timestamp",
+        timestamp=None,
+    )
+    sms_later = make_sms_proxy(
+        number="+15550000002",
+        text="later",
+        timestamp="2026-04-26T10:42:00+00:00",
+    )
+    sms_earlier = make_sms_proxy(
+        number="+15550000001",
+        text="earlier",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    fake_messaging_proxy.messaging.get_messages.return_value = [
+        SMS_PATH_10,
+        SMS_PATH_2,
+        SMS_PATH_1,
+    ]
+    fake_bus.get_proxy_object.side_effect = [
+        fake_messaging_proxy,
+        sms_without_timestamp,
+        sms_later,
+        sms_earlier,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    messages = await client.list_messages()
+
+    assert [message.object_path for message in messages] == [SMS_PATH_1, SMS_PATH_2, SMS_PATH_10]
+
+
+async def test_list_messages_sorts_missing_timestamps_by_numeric_path_suffix(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    sms_10 = make_sms_proxy(
+        number="+15550000010",
+        text="ten",
+        timestamp=None,
+    )
+    sms_2 = make_sms_proxy(
+        number="+15550000002",
+        text="two",
+        timestamp=None,
+    )
+    fake_messaging_proxy.messaging.get_messages.return_value = [SMS_PATH_10, SMS_PATH_2]
+    fake_bus.get_proxy_object.side_effect = [fake_messaging_proxy, sms_10, sms_2]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    messages = await client.list_messages()
+
+    assert [message.object_path for message in messages] == [SMS_PATH_2, SMS_PATH_10]
 
 
 @pytest.mark.parametrize("timestamp", ["", "not-a-timestamp"])
