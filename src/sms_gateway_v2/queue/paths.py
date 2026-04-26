@@ -24,7 +24,9 @@ def atomic_write_json(item: QueueItem, dirs: dict[str, Path]) -> Path:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(tmp_path, final_path)
-    fsync_dir(final_path.parent)
+    fsync_dir(tmp_path.parent)
+    if final_path.parent != tmp_path.parent:
+        fsync_dir(final_path.parent)
     return final_path
 
 

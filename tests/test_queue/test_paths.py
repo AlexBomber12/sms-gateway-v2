@@ -50,6 +50,22 @@ def test_atomic_write_json_writes_via_tmp_then_renames(
     assert not (dirs["tmp"] / f"{item.id}.json").exists()
 
 
+def test_atomic_write_json_fsyncs_tmp_and_pending_directories(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dirs = ensure_state_dirs(state_dir)
+    item = make_item(sample_sms, "1714149693000-0123456789abcdef0123456789abcdef")
+    synced_dirs: list[Path] = []
+    monkeypatch.setattr(queue_paths, "fsync_dir", synced_dirs.append)
+
+    final_path = queue_paths.atomic_write_json(item, dirs)
+
+    assert final_path.exists()
+    assert synced_dirs == [dirs["tmp"], dirs["pending"]]
+
+
 def test_atomic_move_moves_between_dirs(state_dir: Path, sample_sms: IncomingSms) -> None:
     dirs = ensure_state_dirs(state_dir)
     item = make_item(sample_sms, "1714149693000-0123456789abcdef0123456789abcdef")

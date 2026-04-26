@@ -197,7 +197,17 @@ class Queue:
             failed_paths = await asyncio.to_thread(list_items_sorted, self._dirs["failed"])
             count = 0
             for path in failed_paths:
-                item = await asyncio.to_thread(load_item, path)
+                try:
+                    item = await asyncio.to_thread(load_item, path)
+                except QueueCorrupted as exc:
+                    logger.warning(
+                        "queue_failed_item_corrupted",
+                        item_id=path.stem,
+                        path=str(path),
+                        error=str(exc),
+                        elapsed_ms=_elapsed_ms(started_at),
+                    )
+                    continue
                 if item.first_seen_at >= cutoff:
                     await asyncio.to_thread(
                         atomic_move,
