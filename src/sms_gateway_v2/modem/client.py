@@ -1,14 +1,30 @@
 from __future__ import annotations
 
 import time
-from typing import Protocol, cast
+from collections.abc import Awaitable, Callable
+from typing import Protocol, TypeVar, cast
 
 import structlog
 from dbus_fast import BusType
 from dbus_fast.aio import MessageBus
-from dbus_fast.errors import AuthError, DBusError, InvalidAddressError
+from dbus_fast.errors import (
+    AuthError,
+    DBusError,
+    InterfaceNotFoundError,
+    InvalidAddressError,
+    InvalidBusNameError,
+    InvalidInterfaceNameError,
+    InvalidIntrospectionError,
+    InvalidMemberNameError,
+    InvalidMessageError,
+    InvalidObjectPathError,
+    InvalidSignatureError,
+    SignalDisabledError,
+    SignatureBodyMismatchError,
+)
 
-from sms_gateway_v2.modem.exceptions import ModemManagerUnavailable, ModemNotFound
+from sms_gateway_v2.modem.exceptions import ModemError, ModemManagerUnavailable, ModemNotFound
+from sms_gateway_v2.modem.models import ModemInfo, RegistrationState, SignalQuality
 
 logger = structlog.get_logger(__name__)
 
@@ -16,12 +32,63 @@ MODEM_MANAGER_BUS_NAME = "org.freedesktop.ModemManager1"
 MODEM_MANAGER_OBJECT_PATH = "/org/freedesktop/ModemManager1"
 OBJECT_MANAGER_INTERFACE = "org.freedesktop.DBus.ObjectManager"
 MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
+MODEM_3GPP_INTERFACE = "org.freedesktop.ModemManager1.Modem.Modem3gpp"
+SIM_INTERFACE = "org.freedesktop.ModemManager1.Sim"
+DBUS_OPERATION_ERRORS = (
+    OSError,
+    AuthError,
+    DBusError,
+    InterfaceNotFoundError,
+    InvalidAddressError,
+    InvalidBusNameError,
+    InvalidInterfaceNameError,
+    InvalidIntrospectionError,
+    InvalidMemberNameError,
+    InvalidMessageError,
+    InvalidObjectPathError,
+    InvalidSignatureError,
+    SignalDisabledError,
+    SignatureBodyMismatchError,
+)
 
 ManagedObjects = dict[str, dict[str, object]]
+PropertyValue = TypeVar("PropertyValue")
 
 
 class ObjectManagerInterface(Protocol):
     async def call_get_managed_objects(self) -> ManagedObjects: ...
+
+
+class ModemInterface(Protocol):
+    async def get_manufacturer(self) -> str: ...
+
+    async def get_model(self) -> str: ...
+
+    async def get_equipment_identifier(self) -> str: ...
+
+    async def get_primary_port(self) -> str: ...
+
+    async def get_state(self) -> str: ...
+
+    async def get_signal_quality(self) -> tuple[int, bool]: ...
+
+    async def get_sim(self) -> str: ...
+
+
+class Modem3gppInterface(Protocol):
+    async def get_registration_state(self) -> int: ...
+
+    async def get_operator_name(self) -> str: ...
+
+    async def get_operator_code(self) -> str: ...
+
+
+class SimInterface(Protocol):
+    async def get_imsi(self) -> str: ...
+
+    async def get_operator_name(self) -> str: ...
+
+    async def get_operator_identifier(self) -> str: ...
 
 
 class ModemManagerClient:
@@ -37,7 +104,7 @@ class ModemManagerClient:
         try:
             bus = MessageBus(bus_type=BusType.SYSTEM)
             self._bus = await bus.connect()
-        except (OSError, AuthError, DBusError, InvalidAddressError) as exc:
+        except DBUS_OPERATION_ERRORS as exc:
             raise ModemManagerUnavailable("failed to connect to system D-Bus") from exc
 
         logger.info(
@@ -82,7 +149,86 @@ class ModemManagerClient:
         )
         raise ModemNotFound("no ModemManager modem object found")
 
+    async def get_modem_info(self) -> ModemInfo:
+        started_at = time.monotonic()
+        if self._modem_path is None:
+            await self.find_modem()
+        modem_path = self._modem_path
+        assert modem_path is not None
+
+        bus = self._require_bus()
+        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
+        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
+        modem = cast(ModemInterface, proxy.get_interface(MODEM_INTERFACE))
+        modem_3gpp = cast(Modem3gppInterface, proxy.get_interface(MODEM_3GPP_INTERFACE))
+
+        manufacturer = await self._read_required("Manufacturer", modem.get_manufacturer)
+        model = await self._read_required("Model", modem.get_model)
+        equipment_id = await self._read_required(
+            "EquipmentIdentifier",
+            modem.get_equipment_identifier,
+        )
+        device = await self._read_required("PrimaryPort", modem.get_primary_port)
+        state = await self._read_required("State", modem.get_state)
+        signal_percent, signal_recent = await self._read_required(
+            "SignalQuality",
+            modem.get_signal_quality,
+        )
+        registration_value = await self._read_required(
+            "RegistrationState",
+            modem_3gpp.get_registration_state,
+        )
+        await self._read_required("OperatorName", modem_3gpp.get_operator_name)
+        await self._read_required("OperatorCode", modem_3gpp.get_operator_code)
+        sim_path = await self._read_required("Sim", modem.get_sim)
+        sim = await self._get_sim_interface(sim_path)
+
+        info = ModemInfo(
+            object_path=modem_path,
+            manufacturer=manufacturer,
+            model=model,
+            equipment_id=equipment_id,
+            device=device,
+            state=state,
+            registration=RegistrationState.from_dbus_value(registration_value),
+            signal=SignalQuality(percent=signal_percent, recent=signal_recent),
+            sim_imsi=await self._read_optional(sim.get_imsi),
+            sim_operator_name=await self._read_optional(sim.get_operator_name),
+            sim_operator_id=await self._read_optional(sim.get_operator_identifier),
+        )
+        logger.info(
+            "modem_info_read",
+            duration_seconds=time.monotonic() - started_at,
+            modem_path=modem_path,
+        )
+        return info
+
     def _require_bus(self) -> MessageBus:
         if self._bus is None:
             raise ModemManagerUnavailable("not connected to system D-Bus")
         return self._bus
+
+    async def _get_sim_interface(self, sim_path: str) -> SimInterface:
+        bus = self._require_bus()
+        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, sim_path)
+        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, sim_path, introspection)
+        return cast(SimInterface, proxy.get_interface(SIM_INTERFACE))
+
+    async def _read_required(
+        self,
+        property_name: str,
+        reader: Callable[[], Awaitable[PropertyValue]],
+    ) -> PropertyValue:
+        try:
+            return await reader()
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemError(f"failed to read required modem property {property_name}") from exc
+
+    async def _read_optional(
+        self,
+        reader: Callable[[], Awaitable[str]],
+    ) -> str | None:
+        try:
+            return await reader()
+        except DBUS_OPERATION_ERRORS:
+            return None
