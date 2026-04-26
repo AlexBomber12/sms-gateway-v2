@@ -47,7 +47,14 @@ def fake_modem_proxy(fake_modem_props: MagicMock) -> MagicMock:
 
 @pytest.fixture
 def fake_messaging_proxy() -> MagicMock:
-    return MagicMock()
+    messaging = MagicMock()
+    messaging.get_messages = AsyncMock(return_value=[])
+    messaging.call_delete = AsyncMock(return_value=None)
+
+    proxy = MagicMock()
+    proxy.messaging = messaging
+    proxy.get_interface.return_value = messaging
+    return proxy
 
 
 @pytest.fixture
@@ -65,4 +72,13 @@ def fake_sim_proxy() -> MagicMock:
 
 @pytest.fixture
 def fake_sms_proxy() -> MagicMock:
-    return MagicMock()
+    sms = MagicMock()
+    sms.get_number = AsyncMock(return_value="+15551234567")
+    sms.get_text = AsyncMock(return_value="hello")
+    sms.get_timestamp = AsyncMock(return_value="2026-04-26T10:41:33+00:00")
+    sms.get_pdu_type = AsyncMock(return_value="deliver")
+
+    proxy = MagicMock()
+    proxy.sms = sms
+    proxy.get_interface.return_value = sms
+    return proxy

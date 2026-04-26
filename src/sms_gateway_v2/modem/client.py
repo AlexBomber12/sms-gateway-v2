@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Protocol, TypeVar, cast
 
 import structlog
@@ -23,8 +24,13 @@ from dbus_fast.errors import (
     SignatureBodyMismatchError,
 )
 
-from sms_gateway_v2.modem.exceptions import ModemError, ModemManagerUnavailable, ModemNotFound
-from sms_gateway_v2.modem.models import ModemInfo, RegistrationState, SignalQuality
+from sms_gateway_v2.modem.exceptions import (
+    MessageDeleteFailed,
+    ModemError,
+    ModemManagerUnavailable,
+    ModemNotFound,
+)
+from sms_gateway_v2.modem.models import IncomingSms, ModemInfo, RegistrationState, SignalQuality
 
 logger = structlog.get_logger(__name__)
 
@@ -33,6 +39,8 @@ MODEM_MANAGER_OBJECT_PATH = "/org/freedesktop/ModemManager1"
 OBJECT_MANAGER_INTERFACE = "org.freedesktop.DBus.ObjectManager"
 MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
 MODEM_3GPP_INTERFACE = "org.freedesktop.ModemManager1.Modem.Modem3gpp"
+MESSAGING_INTERFACE = "org.freedesktop.ModemManager1.Modem.Messaging"
+SMS_INTERFACE = "org.freedesktop.ModemManager1.Sms"
 SIM_INTERFACE = "org.freedesktop.ModemManager1.Sim"
 DBUS_OPERATION_ERRORS = (
     OSError,
@@ -89,6 +97,22 @@ class SimInterface(Protocol):
     async def get_operator_name(self) -> str: ...
 
     async def get_operator_identifier(self) -> str: ...
+
+
+class MessagingInterface(Protocol):
+    async def get_messages(self) -> list[str]: ...
+
+    async def call_delete(self, sms_path: str) -> None: ...
+
+
+class SmsInterface(Protocol):
+    async def get_number(self) -> str: ...
+
+    async def get_text(self) -> str: ...
+
+    async def get_timestamp(self) -> str: ...
+
+    async def get_pdu_type(self) -> str: ...
 
 
 class ModemManagerClient:
@@ -243,10 +267,56 @@ class ModemManagerClient:
         )
         return registration
 
+    async def list_messages(self) -> list[IncomingSms]:
+        modem_path = await self._ensure_modem_path()
+        messaging = await self._get_messaging_interface(modem_path)
+        sms_paths = await self._read_required("Messages", messaging.get_messages)
+        messages: list[IncomingSms] = []
+
+        for sms_path in sms_paths:
+            sms = await self._get_sms_interface(sms_path)
+            message = IncomingSms(
+                object_path=sms_path,
+                number=await self._read_required("Number", sms.get_number),
+                text=await self._read_required("Text", sms.get_text),
+                timestamp=self._parse_timestamp(await self._read_optional(sms.get_timestamp)),
+                pdu_type=await self._read_required("PduType", sms.get_pdu_type),
+            )
+            messages.append(message)
+            logger.info(
+                "message_listed",
+                modem_path=modem_path,
+                sms_path=sms_path,
+            )
+
+        if all(message.timestamp is not None for message in messages):
+            messages.sort(key=lambda message: cast(datetime, message.timestamp))
+        else:
+            messages.sort(key=lambda message: message.object_path)
+        return messages
+
+    async def delete_message(self, sms_path: str) -> None:
+        modem_path = await self._ensure_modem_path()
+        messaging = await self._get_messaging_interface(modem_path)
+        try:
+            await messaging.call_delete(sms_path)
+        except DBUS_OPERATION_ERRORS as exc:
+            raise MessageDeleteFailed(f"failed to delete SMS {sms_path}: {exc}") from exc
+        logger.info(
+            "message_deleted",
+            modem_path=modem_path,
+            sms_path=sms_path,
+        )
+
     def _require_bus(self) -> MessageBus:
         if self._bus is None:
             raise ModemManagerUnavailable("not connected to system D-Bus")
         return self._bus
+
+    def _parse_timestamp(self, value: str | None) -> datetime | None:
+        if value is None:
+            return None
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
     async def _ensure_modem_path(self) -> str:
         if self._modem_path is None:
@@ -260,6 +330,18 @@ class ModemManagerClient:
         introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, sim_path)
         proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, sim_path, introspection)
         return cast(SimInterface, proxy.get_interface(SIM_INTERFACE))
+
+    async def _get_messaging_interface(self, modem_path: str) -> MessagingInterface:
+        bus = self._require_bus()
+        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, modem_path)
+        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, modem_path, introspection)
+        return cast(MessagingInterface, proxy.get_interface(MESSAGING_INTERFACE))
+
+    async def _get_sms_interface(self, sms_path: str) -> SmsInterface:
+        bus = self._require_bus()
+        introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, sms_path)
+        proxy = bus.get_proxy_object(MODEM_MANAGER_BUS_NAME, sms_path, introspection)
+        return cast(SmsInterface, proxy.get_interface(SMS_INTERFACE))
 
     async def _read_required(
         self,
