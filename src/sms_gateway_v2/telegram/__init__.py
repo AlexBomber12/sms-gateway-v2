@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from sms_gateway_v2.telegram.client import TelegramClient
 from sms_gateway_v2.telegram.exceptions import (
     TelegramAuthError,
     TelegramError,
@@ -10,6 +11,7 @@ from sms_gateway_v2.telegram.models import TelegramMessage
 
 __all__ = [
     "TelegramAuthError",
+    "TelegramClient",
     "TelegramError",
     "TelegramMessage",
     "TelegramRateLimited",
