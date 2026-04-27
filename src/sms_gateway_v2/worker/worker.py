@@ -93,53 +93,31 @@ class DeliveryWorker:
             self._metrics.telegram_send_failures_total.labels(reason="auth_error").inc()
             await self._queue.mark_failed(item)
             return True
-        except TelegramError as exc:
+        except TelegramRateLimited as exc:
+            return await self._handle_recoverable_delivery_failure(
+                item,
+                reason="rate_limited",
+                retry_after=exc.retry_after,
+            )
+        except TelegramTransportError:
+            return await self._handle_recoverable_delivery_failure(
+                item,
+                reason="transport_error",
+                retry_after=None,
+            )
+        except TelegramError:
             attempts_used = item.attempts + 1
-            if not isinstance(exc, TelegramRateLimited | TelegramTransportError):
-                logger.warning(
-                    "delivery_failed_permanent",
-                    item_id=item.id,
-                    attempt=item.attempts,
-                    attempts_used=attempts_used,
-                    reason="exhausted",
-                )
-                self._metrics.sms_failed_total.inc()
-                self._metrics.telegram_send_total.labels(result="failure").inc()
-                self._metrics.telegram_send_failures_total.labels(reason="exhausted").inc()
-                await self._queue.mark_failed(item)
-                return True
-
-            reason = _telegram_failure_reason(exc)
-            if item.attempts >= len(self._retry_schedule_seconds):
-                logger.warning(
-                    "delivery_failed_permanent",
-                    item_id=item.id,
-                    attempt=item.attempts,
-                    attempts_used=attempts_used,
-                    reason="exhausted",
-                )
-                self._metrics.sms_failed_total.inc()
-                self._metrics.telegram_send_total.labels(result="failure").inc()
-                self._metrics.telegram_send_failures_total.labels(reason="exhausted").inc()
-                await self._queue.mark_failed(item)
-                return True
-
-            delay_seconds = float(self._retry_schedule_seconds[item.attempts])
-            if isinstance(exc, TelegramRateLimited):
-                delay_seconds = max(delay_seconds, exc.retry_after)
-            next_retry_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
-            updated = await self._queue.update_attempt(item, next_retry_at=next_retry_at)
-            await self._move_processing_to_pending(updated)
-            self._metrics.telegram_send_total.labels(result="failure").inc()
-            self._metrics.telegram_send_failures_total.labels(reason=reason).inc()
-            logger.info(
-                "delivery_retry_scheduled",
+            logger.warning(
+                "delivery_failed_permanent",
                 item_id=item.id,
                 attempt=item.attempts,
                 attempts_used=attempts_used,
-                delay_seconds=delay_seconds,
-                reason=reason,
+                reason="exhausted",
             )
+            self._metrics.sms_failed_total.inc()
+            self._metrics.telegram_send_total.labels(result="failure").inc()
+            self._metrics.telegram_send_failures_total.labels(reason="exhausted").inc()
+            await self._queue.mark_failed(item)
             return True
         except Exception as exc:
             logger.exception(
@@ -177,12 +155,46 @@ class DeliveryWorker:
     def _compute_idle_timeout(self) -> float:
         return 60.0
 
+    async def _handle_recoverable_delivery_failure(
+        self,
+        item: QueueItem,
+        *,
+        reason: str,
+        retry_after: float | None,
+    ) -> bool:
+        attempts_used = item.attempts + 1
+        if item.attempts >= len(self._retry_schedule_seconds):
+            logger.warning(
+                "delivery_failed_permanent",
+                item_id=item.id,
+                attempt=item.attempts,
+                attempts_used=attempts_used,
+                reason="exhausted",
+            )
+            self._metrics.sms_failed_total.inc()
+            self._metrics.telegram_send_total.labels(result="failure").inc()
+            self._metrics.telegram_send_failures_total.labels(reason="exhausted").inc()
+            await self._queue.mark_failed(item)
+            return True
+
+        delay_seconds = float(self._retry_schedule_seconds[item.attempts])
+        if retry_after is not None:
+            delay_seconds = max(delay_seconds, retry_after)
+        next_retry_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
+        updated = await self._queue.update_attempt(item, next_retry_at=next_retry_at)
+        await self._move_processing_to_pending(updated)
+        self._metrics.telegram_send_total.labels(result="failure").inc()
+        self._metrics.telegram_send_failures_total.labels(reason=reason).inc()
+        logger.info(
+            "delivery_retry_scheduled",
+            item_id=item.id,
+            attempt=item.attempts,
+            attempts_used=attempts_used,
+            delay_seconds=delay_seconds,
+            reason=reason,
+        )
+        return True
+
     async def _move_processing_to_pending(self, item: QueueItem) -> None:
         dirs = self._queue._dirs_or_raise()
         await asyncio.to_thread(atomic_move, item.id, dirs["processing"], dirs["pending"])
-
-
-def _telegram_failure_reason(error: TelegramRateLimited | TelegramTransportError) -> str:
-    if isinstance(error, TelegramRateLimited):
-        return "rate_limited"
-    return "transport_error"
