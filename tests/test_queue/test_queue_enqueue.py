@@ -23,6 +23,17 @@ async def dedup_item_id(db_path: Path, content_hash: str) -> str:
     return str(row[0])
 
 
+async def dedup_count(db_path: Path, content_hash: str) -> int:
+    async with aiosqlite.connect(db_path) as connection:
+        cursor = await connection.execute(
+            "SELECT COUNT(*) FROM seen_messages WHERE content_hash = ?",
+            (content_hash,),
+        )
+        row = await cursor.fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 async def test_queue_initialize_is_idempotent(queue: Queue) -> None:
     await queue.initialize()
 
@@ -255,6 +266,31 @@ async def test_enqueue_missing_timestamp_uses_first_seen_time_bucket(
         assert len(list(queue._dirs["pending"].glob("*.json"))) == 2
     finally:
         await queue.close()
+
+
+async def test_enqueue_detects_pending_duplicate_after_window_change(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+) -> None:
+    original_queue = Queue(state_dir, dedup_window_minutes=5)
+    await original_queue.initialize()
+    original_item = await original_queue.enqueue(sample_sms)
+    assert original_item is not None
+    assert original_item.content_hash != sample_sms.content_hash()
+    await original_queue.close()
+
+    reopened_queue = Queue(state_dir, dedup_window_minutes=1)
+    await reopened_queue.initialize()
+    try:
+        duplicate = await reopened_queue.enqueue(sample_sms)
+
+        assert duplicate is None
+        assert list(reopened_queue._dirs["pending"].glob("*.json")) == [
+            reopened_queue._dirs["pending"] / f"{original_item.id}.json",
+        ]
+        assert await dedup_count(state_dir / "dedup.db", sample_sms.content_hash()) == 0
+    finally:
+        await reopened_queue.close()
 
 
 async def test_enqueue_handles_duplicate_race_after_file_write(

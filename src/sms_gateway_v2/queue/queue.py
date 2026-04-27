@@ -75,8 +75,9 @@ class Queue:
                 started_at=started_at,
             )
             if duplicate_item is not None:
-                with suppress(DuplicateMessage):
-                    await self._dedup.record_new(content_hash, duplicate_item.id)
+                if self._content_hash_for_item(duplicate_item) == content_hash:
+                    with suppress(DuplicateMessage):
+                        await self._dedup.record_new(content_hash, duplicate_item.id)
                 logger.info(
                     "queue_enqueue_skipped_pending_duplicate",
                     item_id=duplicate_item.id,
@@ -371,6 +372,9 @@ class Queue:
         fallback_timestamp = item.first_seen_at
         return self._content_hash(item.sms, fallback_timestamp=fallback_timestamp)
 
+    def _current_content_hash_for_item(self, item: QueueItem) -> str:
+        return self._content_hash(item.sms, fallback_timestamp=item.first_seen_at)
+
     def _dirs_or_raise(self) -> dict[str, Path]:
         if not self._dirs:
             raise QueueError("queue is not initialized")
@@ -411,7 +415,10 @@ class Queue:
                     elapsed_ms=_elapsed_ms(started_at),
                 )
                 continue
-            if self._content_hash_for_item(item) == content_hash:
+            if content_hash in {
+                self._content_hash_for_item(item),
+                self._current_content_hash_for_item(item),
+            }:
                 return item
         return None
 
