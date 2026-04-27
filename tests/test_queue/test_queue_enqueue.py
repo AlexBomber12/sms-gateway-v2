@@ -29,6 +29,15 @@ async def test_queue_initialize_is_idempotent(queue: Queue) -> None:
     assert queue._dirs["pending"].is_dir()
 
 
+@pytest.mark.parametrize("dedup_window_minutes", [0, -1])
+def test_queue_rejects_non_positive_dedup_window_minutes(
+    state_dir: Path,
+    dedup_window_minutes: int,
+) -> None:
+    with pytest.raises(ValueError, match="dedup_window_minutes"):
+        Queue(state_dir, dedup_window_minutes=dedup_window_minutes)
+
+
 async def test_queue_initialize_retries_when_dedup_initialize_fails(state_dir: Path) -> None:
     queue = Queue(state_dir, dedup_window_minutes=1)
     queue._dedup.initialize = AsyncMock(side_effect=[RuntimeError("boom"), None])

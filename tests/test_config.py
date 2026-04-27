@@ -75,3 +75,16 @@ def test_settings_rejects_negative_queue_retention_days(
 
     with pytest.raises(ValidationError, match=field_name):
         Settings()
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_settings_rejects_non_positive_dedup_window_minutes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    value: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DEDUP_WINDOW_MINUTES", value)
+
+    with pytest.raises(ValidationError, match="dedup_window_minutes"):
+        Settings()

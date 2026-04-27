@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     state_dir: Path = Path("./state")
     queue_sent_retention_days: int = Field(default=30, ge=0)
     queue_failed_retention_days: int = Field(default=30, ge=0)
-    dedup_window_minutes: int = 1
+    dedup_window_minutes: int = Field(default=1, ge=1)
 
     @property
     def dedup_db_path(self) -> Path:

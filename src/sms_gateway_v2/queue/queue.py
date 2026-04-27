@@ -27,6 +27,8 @@ logger = structlog.get_logger(__name__)
 
 class Queue:
     def __init__(self, state_dir: Path, dedup_window_minutes: int) -> None:
+        if dedup_window_minutes < 1:
+            raise ValueError("dedup_window_minutes must be greater than or equal to 1")
         self._state_dir = state_dir
         self._dedup_window_minutes = dedup_window_minutes
         self._dirs: dict[str, Path] = {}
@@ -362,7 +364,7 @@ class Queue:
 
     def _content_hash(self, sms: IncomingSms, *, fallback_timestamp: datetime) -> str:
         timestamp = sms.timestamp or fallback_timestamp
-        window_seconds = max(self._dedup_window_minutes, 1) * 60
+        window_seconds = self._dedup_window_minutes * 60
         bucket_seconds = int(timestamp.timestamp()) // window_seconds * window_seconds
         bucket = datetime.fromtimestamp(bucket_seconds, tz=timestamp.tzinfo).isoformat()
         payload = f"{sms.number}|{sms.text}|{bucket}"
