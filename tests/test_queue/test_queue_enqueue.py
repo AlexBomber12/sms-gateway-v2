@@ -1,0 +1,338 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import AsyncMock
+
+import aiosqlite
+import pytest
+
+from sms_gateway_v2.modem import IncomingSms
+from sms_gateway_v2.queue import DuplicateMessage, Queue, QueueError, QueueItem
+from sms_gateway_v2.queue.paths import atomic_write_json
+
+
+async def dedup_item_id(db_path: Path, content_hash: str) -> str:
+    async with aiosqlite.connect(db_path) as connection:
+        cursor = await connection.execute(
+            "SELECT item_id FROM seen_messages WHERE content_hash = ?",
+            (content_hash,),
+        )
+        row = await cursor.fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+async def dedup_count(db_path: Path, content_hash: str) -> int:
+    async with aiosqlite.connect(db_path) as connection:
+        cursor = await connection.execute(
+            "SELECT COUNT(*) FROM seen_messages WHERE content_hash = ?",
+            (content_hash,),
+        )
+        row = await cursor.fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+async def test_queue_initialize_is_idempotent(queue: Queue) -> None:
+    await queue.initialize()
+
+    assert queue._dirs["pending"].is_dir()
+
+
+async def test_claim_next_raises_queue_error_before_initialize(state_dir: Path) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+
+    with pytest.raises(QueueError, match="not initialized"):
+        await queue.claim_next()
+
+
+async def test_claim_next_raises_queue_error_after_close(state_dir: Path) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+    await queue.initialize()
+    await queue.close()
+
+    with pytest.raises(QueueError, match="not initialized"):
+        await queue.claim_next()
+
+
+@pytest.mark.parametrize("dedup_window_minutes", [0, -1])
+def test_queue_rejects_non_positive_dedup_window_minutes(
+    state_dir: Path,
+    dedup_window_minutes: int,
+) -> None:
+    with pytest.raises(ValueError, match="dedup_window_minutes"):
+        Queue(state_dir, dedup_window_minutes=dedup_window_minutes)
+
+
+async def test_queue_initialize_retries_when_dedup_initialize_fails(state_dir: Path) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+    queue._dedup.initialize = AsyncMock(side_effect=[RuntimeError("boom"), None])
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await queue.initialize()
+
+    assert queue._dirs == {}
+    await queue.initialize()
+
+    assert queue._dirs["pending"].is_dir()
+    assert queue._dedup.initialize.await_count == 2
+
+
+async def test_queue_can_reinitialize_after_close(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+    await queue.initialize()
+    await queue.close()
+    await queue.initialize()
+    try:
+        item = await queue.enqueue(sample_sms)
+
+        assert item is not None
+        assert (queue._dirs["pending"] / f"{item.id}.json").exists()
+    finally:
+        await queue.close()
+
+
+async def test_enqueue_new_sms_returns_item_and_creates_pending_file(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    item = await queue.enqueue(sample_sms)
+
+    assert isinstance(item, QueueItem)
+    assert (queue._dirs["pending"] / f"{item.id}.json").exists()
+
+
+async def test_with_content_hash_preserves_existing_hash(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    item = QueueItem(
+        id="1714149693000-0123456789abcdef0123456789abcdef",
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+        content_hash="a" * 64,
+    )
+
+    assert queue._with_content_hash(item) == item
+
+
+async def test_enqueue_duplicate_sms_returns_none_and_does_not_create_second_file(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    first = await queue.enqueue(sample_sms)
+    second = await queue.enqueue(sample_sms)
+
+    assert first is not None
+    assert second is None
+    assert len(list(queue._dirs["pending"].glob("*.json"))) == 1
+    assert await queue._dedup.is_duplicate(sample_sms.content_hash()) is True
+
+
+async def test_enqueue_repairs_orphaned_pending_duplicate(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    orphaned = QueueItem(
+        id="1714149693000-0123456789abcdef0123456789abcdef",
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+    )
+    atomic_write_json(orphaned, queue._dirs)
+
+    duplicate = await queue.enqueue(sample_sms)
+
+    assert duplicate is None
+    assert len(list(queue._dirs["pending"].glob("*.json"))) == 1
+    assert await queue._dedup.is_duplicate(sample_sms.content_hash()) is True
+
+
+async def test_enqueue_orphaned_pending_duplicate_tolerates_repair_race(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    orphaned = QueueItem(
+        id="1714149693000-0123456789abcdef0123456789abcdef",
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+    )
+    atomic_write_json(orphaned, queue._dirs)
+    queue._dedup.record_new = AsyncMock(side_effect=DuplicateMessage("duplicate"))
+
+    duplicate = await queue.enqueue(sample_sms)
+
+    assert duplicate is None
+    assert len(list(queue._dirs["pending"].glob("*.json"))) == 1
+
+
+async def test_enqueue_duplicate_scan_skips_corrupt_pending_file(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    corrupt_path = queue._dirs["pending"] / "1714149692000-bad.json"
+    corrupt_path.write_text("{bad-json", encoding="utf-8")
+
+    item = await queue.enqueue(sample_sms)
+
+    assert item is not None
+    assert corrupt_path.exists()
+    assert len(list(queue._dirs["pending"].glob("*.json"))) == 2
+
+
+async def test_enqueue_duplicate_scan_skips_id_mismatched_pending_file(
+    queue: Queue,
+    sample_sms: IncomingSms,
+    state_dir: Path,
+) -> None:
+    mismatched_file_id = "1714149692000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    payload_item_id = "1714149692001-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    mismatched_item = QueueItem(
+        id=payload_item_id,
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+    )
+    mismatched_path = queue._dirs["pending"] / f"{mismatched_file_id}.json"
+    mismatched_path.write_text(mismatched_item.to_json(), encoding="utf-8")
+
+    item = await queue.enqueue(sample_sms)
+
+    assert item is not None
+    assert len(list(queue._dirs["pending"].glob("*.json"))) == 2
+    assert await dedup_item_id(state_dir / "dedup.db", sample_sms.content_hash()) == item.id
+
+
+async def test_enqueue_deduplicates_sms_without_timestamp(
+    queue: Queue,
+    sample_sms: IncomingSms,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sms_without_timestamp = sample_sms.model_copy(update={"timestamp": None})
+    items = iter(
+        [
+            QueueItem(
+                id="1714149665000-0123456789abcdef0123456789abcdef",
+                sms=sms_without_timestamp,
+                first_seen_at=datetime(2026, 4, 26, 10, 41, 5, tzinfo=UTC),
+            ),
+            QueueItem(
+                id="1714149715000-abcdef0123456789abcdef0123456789",
+                sms=sms_without_timestamp,
+                first_seen_at=datetime(2026, 4, 26, 10, 41, 55, tzinfo=UTC),
+            ),
+        ]
+    )
+    monkeypatch.setattr("sms_gateway_v2.queue.queue.QueueItem.new", lambda _sms: next(items))
+
+    first = await queue.enqueue(sms_without_timestamp)
+    second = await queue.enqueue(sms_without_timestamp)
+
+    assert first is not None
+    assert second is None
+
+
+async def test_enqueue_missing_timestamp_uses_first_seen_time_bucket(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+    await queue.initialize()
+    sms_without_timestamp = sample_sms.model_copy(update={"timestamp": None})
+    items = iter(
+        [
+            QueueItem(
+                id="1714149665000-0123456789abcdef0123456789abcdef",
+                sms=sms_without_timestamp,
+                first_seen_at=datetime(2026, 4, 26, 10, 41, 5, tzinfo=UTC),
+            ),
+            QueueItem(
+                id="1714149725000-abcdef0123456789abcdef0123456789",
+                sms=sms_without_timestamp,
+                first_seen_at=datetime(2026, 4, 26, 10, 42, 5, tzinfo=UTC),
+            ),
+        ]
+    )
+    monkeypatch.setattr("sms_gateway_v2.queue.queue.QueueItem.new", lambda _sms: next(items))
+    try:
+        first = await queue.enqueue(sms_without_timestamp)
+        second = await queue.enqueue(sms_without_timestamp)
+
+        assert first is not None
+        assert second is not None
+        assert len(list(queue._dirs["pending"].glob("*.json"))) == 2
+    finally:
+        await queue.close()
+
+
+async def test_enqueue_detects_pending_duplicate_after_window_change(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+) -> None:
+    original_queue = Queue(state_dir, dedup_window_minutes=5)
+    await original_queue.initialize()
+    original_item = await original_queue.enqueue(sample_sms)
+    assert original_item is not None
+    assert original_item.content_hash != sample_sms.content_hash()
+    await original_queue.close()
+
+    reopened_queue = Queue(state_dir, dedup_window_minutes=1)
+    await reopened_queue.initialize()
+    try:
+        duplicate = await reopened_queue.enqueue(sample_sms)
+
+        assert duplicate is None
+        assert list(reopened_queue._dirs["pending"].glob("*.json")) == [
+            reopened_queue._dirs["pending"] / f"{original_item.id}.json",
+        ]
+        assert await dedup_count(state_dir / "dedup.db", sample_sms.content_hash()) == 0
+    finally:
+        await reopened_queue.close()
+
+
+async def test_enqueue_handles_duplicate_race_after_file_write(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    queue._dedup.record_new = AsyncMock(side_effect=DuplicateMessage("duplicate"))
+
+    item = await queue.enqueue(sample_sms)
+
+    assert item is None
+    assert list(queue._dirs["pending"].glob("*.json")) == []
+
+
+async def test_enqueue_hash_window_collapses_messages_in_same_window(state_dir: Path) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=5)
+    await queue.initialize()
+    try:
+        first_sms = IncomingSms(
+            object_path="/org/freedesktop/ModemManager1/SMS/1",
+            number="+15551234567",
+            text="hello",
+            timestamp=sample_time(10, 41),
+            pdu_type="deliver",
+        )
+        second_sms = first_sms.model_copy(
+            update={
+                "object_path": "/org/freedesktop/ModemManager1/SMS/2",
+                "timestamp": sample_time(10, 44),
+            }
+        )
+
+        first = await queue.enqueue(first_sms)
+        second = await queue.enqueue(second_sms)
+
+        assert first is not None
+        assert second is None
+    finally:
+        await queue.close()
+
+
+def sample_time(hour: int, minute: int) -> object:
+    from datetime import UTC, datetime
+
+    return datetime(2026, 4, 26, hour, minute, 33, tzinfo=UTC)
