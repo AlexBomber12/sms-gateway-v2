@@ -184,6 +184,8 @@ class Queue:
             }
         )
         async with self._lock:
+            if not (self._dirs["processing"] / f"{item.id}.json").exists():
+                raise ItemNotFound(f"queue item not found in processing: {item.id}")
             await asyncio.to_thread(save_item, updated, self._dirs["processing"])
             logger.info(
                 "queue_item_attempt_updated",

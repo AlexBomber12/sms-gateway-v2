@@ -91,3 +91,21 @@ async def test_update_attempt_increments_attempts_and_persists_in_processing(
     assert updated.last_attempt_at is not None
     assert updated.next_retry_at == next_retry_at
     assert persisted == updated
+
+
+async def test_update_attempt_raises_item_not_found_for_stale_item(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    item = await enqueue_and_claim(queue, sample_sms)
+    recovered = await queue.recover_processing()
+    assert recovered == 1
+
+    with pytest.raises(ItemNotFound, match=item.id):
+        await queue.update_attempt(
+            item,
+            next_retry_at=datetime(2026, 4, 26, 10, 46, 33, tzinfo=UTC),
+        )
+
+    assert not (queue._dirs["processing"] / f"{item.id}.json").exists()
+    assert (queue._dirs["pending"] / f"{item.id}.json").exists()

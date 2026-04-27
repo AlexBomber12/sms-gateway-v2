@@ -120,6 +120,15 @@ def test_load_item_on_invalid_json_raises_queue_corrupted(state_dir: Path) -> No
         load_item(path)
 
 
+def test_load_item_on_invalid_utf8_raises_queue_corrupted(state_dir: Path) -> None:
+    dirs = ensure_state_dirs(state_dir)
+    path = dirs["pending"] / "bad.json"
+    path.write_bytes(b"\xff\xfe")
+
+    with pytest.raises(QueueCorrupted, match=str(path)):
+        load_item(path)
+
+
 def test_load_item_wraps_read_errors(state_dir: Path) -> None:
     dirs = ensure_state_dirs(state_dir)
 

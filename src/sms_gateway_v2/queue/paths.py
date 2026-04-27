@@ -43,7 +43,7 @@ def atomic_move(item_id: str, source_dir: Path, dest_dir: Path) -> Path:
 def load_item(path: Path) -> QueueItem:
     try:
         return QueueItem.from_json(path.read_text(encoding="utf-8"))
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise QueueCorrupted(f"failed to read queue item {path}: {exc}") from exc
 
 
