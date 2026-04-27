@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from sms_gateway_v2 import __version__
 from sms_gateway_v2.app import create_app
+from sms_gateway_v2.metrics import MetricsRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -41,3 +42,9 @@ def test_index_returns_sms_gateway_title() -> None:
 
     assert response.status_code == 200
     assert "SMS Gateway v2" in response.text
+
+
+def test_app_state_metrics_is_metrics_registry() -> None:
+    app = create_app()
+
+    assert isinstance(app.state.metrics, MetricsRegistry)

@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 
 from sms_gateway_v2 import __version__
 from sms_gateway_v2.config import get_settings
+from sms_gateway_v2.metrics import MetricsRegistry, metrics_endpoint
 
 router = APIRouter()
 
@@ -37,6 +38,9 @@ def index() -> HTMLResponse:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="SMS Gateway v2")
-    app.state.settings = get_settings()
+    settings = get_settings()
+    app.state.settings = settings
+    app.state.metrics = MetricsRegistry()
+    app.add_api_route(settings.metrics_path, metrics_endpoint, methods=["GET"])
     app.include_router(router)
     return app
