@@ -37,6 +37,9 @@ class TelegramClient:
         if chat_id == "":
             msg = "chat_id must not be empty"
             raise ValueError(msg)
+        if max_retries < 1:
+            msg = "max_retries must be greater than or equal to 1"
+            raise ValueError(msg)
 
         self.bot_token = bot_token
         self.chat_id = chat_id
