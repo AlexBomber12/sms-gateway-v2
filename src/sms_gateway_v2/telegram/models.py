@@ -20,7 +20,7 @@ class TelegramMessage(BaseModel):
     def from_sms(cls, chat_id: str, number: str, text: str) -> Self:
         body = f"<b>{escape(number)}</b>\n{escape(text)}"
         if len(body) > MAX_TELEGRAM_TEXT_LENGTH:
-            body = body[: MAX_TELEGRAM_TEXT_LENGTH - len(TRUNCATION_SUFFIX)] + TRUNCATION_SUFFIX
+            body = _truncate_sms_body(number, text)
         return cls(chat_id=chat_id, text=body)
 
     @field_validator("text")
@@ -33,3 +33,28 @@ class TelegramMessage(BaseModel):
             msg = "text must be 4096 characters or fewer"
             raise ValueError(msg)
         return value
+
+
+def _truncate_sms_body(number: str, text: str) -> str:
+    escaped_number = escape(number)
+    prefix = f"<b>{escaped_number}</b>\n"
+    text_limit = MAX_TELEGRAM_TEXT_LENGTH - len(prefix) - len(TRUNCATION_SUFFIX)
+    if text_limit >= 0:
+        escaped_text = _escape_prefix(text, text_limit)
+        return f"{prefix}{escaped_text}{TRUNCATION_SUFFIX}"
+
+    number_limit = MAX_TELEGRAM_TEXT_LENGTH - len("<b></b>\n") - len(TRUNCATION_SUFFIX)
+    truncated_number = _escape_prefix(number, number_limit)
+    return f"<b>{truncated_number}{TRUNCATION_SUFFIX}</b>\n"
+
+
+def _escape_prefix(value: str, max_length: int) -> str:
+    escaped_parts: list[str] = []
+    escaped_length = 0
+    for character in value:
+        escaped_character = escape(character)
+        if escaped_length + len(escaped_character) > max_length:
+            break
+        escaped_parts.append(escaped_character)
+        escaped_length += len(escaped_character)
+    return "".join(escaped_parts)

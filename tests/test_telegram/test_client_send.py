@@ -55,6 +55,21 @@ async def test_send_message_returns_successfully_on_ok_response(
     sleep.assert_not_awaited()
 
 
+async def test_send_message_uses_configured_chat_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post = AsyncMock(side_effect=[ok_response()])
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+
+    async with TelegramClient("token", "-configured") as client:
+        await client.send_message(TelegramMessage(chat_id="-message", text="hello"))
+
+    post.assert_awaited_once_with(
+        "/sendMessage",
+        json={"chat_id": "-configured", "text": "hello", "parse_mode": "HTML"},
+    )
+
+
 async def test_send_message_raises_telegram_error_on_not_ok_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

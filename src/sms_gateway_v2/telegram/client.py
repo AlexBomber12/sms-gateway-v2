@@ -80,7 +80,7 @@ class TelegramClient:
                 response = await client.post(
                     "/sendMessage",
                     json={
-                        "chat_id": message.chat_id,
+                        "chat_id": self.chat_id,
                         "text": message.text,
                         "parse_mode": message.parse_mode,
                     },

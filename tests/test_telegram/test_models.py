@@ -47,3 +47,20 @@ def test_from_sms_truncates_with_ellipsis_at_telegram_limit() -> None:
 
     assert len(message.text) == 4096
     assert message.text.endswith("...")
+
+
+def test_from_sms_truncation_does_not_split_html_entities() -> None:
+    message = TelegramMessage.from_sms(chat_id="123", number="+1", text=("x" * 4082) + "&")
+
+    assert len(message.text) <= 4096
+    assert message.text.endswith("...")
+    assert "&..." not in message.text
+
+
+def test_from_sms_truncates_long_number_without_splitting_entities() -> None:
+    message = TelegramMessage.from_sms(chat_id="123", number=("x" * 4084) + "&", text="hello")
+
+    assert len(message.text) <= 4096
+    assert message.text.startswith("<b>")
+    assert message.text.endswith("</b>\n")
+    assert "&..." not in message.text
