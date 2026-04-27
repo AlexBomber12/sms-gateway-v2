@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock
 
@@ -145,6 +146,22 @@ async def test_start_rolls_back_and_allows_retry_when_recover_processing_fails(
         assert relay.state().status == "running"
     finally:
         await relay.stop()
+
+
+async def test_start_rolls_back_on_cancellation_after_queue_initialize(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+) -> None:
+    queue.recover_processing = AsyncMock(side_effect=asyncio.CancelledError)
+    queue.close = AsyncMock(wraps=queue.close)
+
+    with pytest.raises(asyncio.CancelledError):
+        await relay.start()
+
+    assert relay.state().status == "stopped"
+    modem_client.disconnect.assert_awaited_once()
+    queue.close.assert_awaited_once()
 
 
 async def test_start_calls_recover_processing_and_logs_count(

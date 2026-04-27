@@ -65,6 +65,13 @@ class SmsRelay:
             self._worker_task.add_done_callback(self._log_worker_task_result)
             self._started_at = datetime.now(UTC)
             self._status = "running"
+        except asyncio.CancelledError as exc:
+            await self._rollback_startup_failure(
+                exc,
+                connected=connected,
+                queue_initialized=queue_initialized,
+            )
+            raise
         except Exception as exc:
             await self._rollback_startup_failure(
                 exc,
@@ -104,34 +111,7 @@ class SmsRelay:
     async def _on_new_sms(self, sms_path: str) -> None:
         try:
             async with self._sms_handler_lock:
-                sms = await self._find_sms_by_path(sms_path)
-                if sms is None:
-                    logger.warning("relay_sms_path_not_found", sms_path=sms_path)
-                    return
-
-                item = await self._queue.enqueue(sms)
-                if item is None:
-                    self._metrics.sms_dedup_hits_total.inc()
-                    logger.info("relay_sms_skipped_duplicate", sms_path=sms_path)
-                else:
-                    self._metrics.sms_received_total.inc()
-                    self._metrics.last_sms_received_seconds.set(time.time())
-                    self._last_sms_received_at = datetime.now(UTC)
-                    logger.info(
-                        "relay_sms_enqueued",
-                        item_id=item.id,
-                        sms_path=sms_path,
-                    )
-
-                self._worker.wakeup()
-                try:
-                    await self._modem_client.delete_message(sms_path)
-                except MessageDeleteFailed as exc:
-                    logger.warning(
-                        "relay_sms_delete_failed",
-                        sms_path=sms_path,
-                        error=str(exc),
-                    )
+                await self._process_sms_path(sms_path, fail_on_delete_error=False)
         except Exception as exc:
             self._last_error = str(exc)
             logger.exception(
@@ -143,7 +123,8 @@ class SmsRelay:
     async def _drain_existing_messages(self) -> None:
         messages = await self._modem_client.list_messages()
         for message in messages:
-            await self._on_new_sms(message.object_path)
+            async with self._sms_handler_lock:
+                await self._process_sms_path(message.object_path, fail_on_delete_error=True)
         logger.info("relay_drain_completed", count_drained=len(messages))
 
     def state(self) -> RelayState:
@@ -158,9 +139,41 @@ class SmsRelay:
         messages = await self._modem_client.list_messages()
         return next((message for message in messages if message.object_path == sms_path), None)
 
+    async def _process_sms_path(self, sms_path: str, *, fail_on_delete_error: bool) -> None:
+        sms = await self._find_sms_by_path(sms_path)
+        if sms is None:
+            logger.warning("relay_sms_path_not_found", sms_path=sms_path)
+            return
+
+        item = await self._queue.enqueue(sms)
+        if item is None:
+            self._metrics.sms_dedup_hits_total.inc()
+            logger.info("relay_sms_skipped_duplicate", sms_path=sms_path)
+        else:
+            self._metrics.sms_received_total.inc()
+            self._metrics.last_sms_received_seconds.set(time.time())
+            self._last_sms_received_at = datetime.now(UTC)
+            logger.info(
+                "relay_sms_enqueued",
+                item_id=item.id,
+                sms_path=sms_path,
+            )
+
+        self._worker.wakeup()
+        try:
+            await self._modem_client.delete_message(sms_path)
+        except MessageDeleteFailed as exc:
+            logger.warning(
+                "relay_sms_delete_failed",
+                sms_path=sms_path,
+                error=str(exc),
+            )
+            if fail_on_delete_error:
+                raise
+
     async def _rollback_startup_failure(
         self,
-        exc: Exception,
+        exc: BaseException,
         *,
         connected: bool,
         queue_initialized: bool,
