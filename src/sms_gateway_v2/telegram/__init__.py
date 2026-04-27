@@ -6,10 +6,12 @@ from sms_gateway_v2.telegram.exceptions import (
     TelegramRateLimited,
     TelegramTransportError,
 )
+from sms_gateway_v2.telegram.models import TelegramMessage
 
 __all__ = [
     "TelegramAuthError",
     "TelegramError",
+    "TelegramMessage",
     "TelegramRateLimited",
     "TelegramTransportError",
 ]
