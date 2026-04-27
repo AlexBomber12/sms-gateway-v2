@@ -84,7 +84,7 @@ async def test_generic_telegram_error_schedules_retry_with_exhausted_reason(
     assert metric_value(metrics, "telegram_send_failures_total", {"reason": "exhausted"}) == 1.0
 
 
-async def test_transport_error_exhausts_retry_budget(
+async def test_transport_error_schedules_final_retry_delay(
     queue: Queue,
     telegram_client: MagicMock,
     metrics: MetricsRegistry,
@@ -94,6 +94,32 @@ async def test_transport_error_exhausts_retry_budget(
     item = await queue.enqueue(sample_sms)
     assert item is not None
     item = await _save_pending_attempts(queue, item, attempts=2)
+    telegram_client.send_message.side_effect = TelegramTransportError("network")
+    before = datetime.now(UTC) + timedelta(seconds=4)
+
+    assert await worker._process_one_pending_item() is True
+
+    after = datetime.now(UTC) + timedelta(seconds=4)
+    pending_item = load_item(queue._dirs["pending"] / f"{item.id}.json")
+    assert pending_item.attempts == 3
+    assert pending_item.next_retry_at is not None
+    assert before <= pending_item.next_retry_at <= after
+    assert metric_value(metrics, "sms_failed_total") == 0.0
+    assert (
+        metric_value(metrics, "telegram_send_failures_total", {"reason": "transport_error"}) == 1.0
+    )
+
+
+async def test_transport_error_exhausts_retry_budget(
+    queue: Queue,
+    telegram_client: MagicMock,
+    metrics: MetricsRegistry,
+    worker: DeliveryWorker,
+    sample_sms: IncomingSms,
+) -> None:
+    item = await queue.enqueue(sample_sms)
+    assert item is not None
+    item = await _save_pending_attempts(queue, item, attempts=3)
     telegram_client.send_message.side_effect = TelegramTransportError("network")
 
     assert await worker._process_one_pending_item() is True

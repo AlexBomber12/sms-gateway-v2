@@ -96,7 +96,7 @@ class DeliveryWorker:
         except TelegramError as exc:
             reason = _telegram_failure_reason(exc)
             attempts_used = item.attempts + 1
-            if attempts_used >= len(self._retry_schedule_seconds):
+            if item.attempts >= len(self._retry_schedule_seconds):
                 logger.warning(
                     "delivery_failed_permanent",
                     item_id=item.id,
