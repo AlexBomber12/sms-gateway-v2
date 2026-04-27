@@ -243,10 +243,11 @@ class Queue:
     async def cleanup_sent(self, *, max_age_days: int) -> int:
         started_at = time.monotonic()
         async with self._lock:
+            item_ids = await self._dedup.item_ids_older_than(ItemStatus.SENT, max_age_days)
             count = await asyncio.to_thread(
-                _remove_files_older_than,
+                _remove_item_files,
                 self._dirs["sent"],
-                max_age_days,
+                item_ids,
             )
             await self._dedup.purge_older_than(ItemStatus.SENT, max_age_days)
             logger.info(
@@ -259,10 +260,11 @@ class Queue:
     async def cleanup_failed(self, *, max_age_days: int) -> int:
         started_at = time.monotonic()
         async with self._lock:
+            item_ids = await self._dedup.item_ids_older_than(ItemStatus.FAILED, max_age_days)
             count = await asyncio.to_thread(
-                _remove_files_older_than,
+                _remove_item_files,
                 self._dirs["failed"],
-                max_age_days,
+                item_ids,
             )
             await self._dedup.purge_older_than(ItemStatus.FAILED, max_age_days)
             logger.info(
@@ -303,11 +305,11 @@ def _elapsed_ms(started_at: float) -> int:
     return int((time.monotonic() - started_at) * 1000)
 
 
-def _remove_files_older_than(directory: Path, max_age_days: int) -> int:
-    cutoff = time.time() - (max_age_days * 86_400)
+def _remove_item_files(directory: Path, item_ids: list[str]) -> int:
     count = 0
-    for path in list_items_sorted(directory):
-        if path.stat().st_mtime < cutoff:
+    for item_id in item_ids:
+        path = directory / f"{item_id}.json"
+        if path.exists():
             path.unlink()
             count += 1
     return count

@@ -145,6 +145,22 @@ async def test_cleanup_sent_removes_old_files_and_purges_dedup_rows(
     assert await dedup_count(state_dir / "dedup.db", recent_sms.content_hash()) == 1
 
 
+async def test_cleanup_sent_keeps_old_mtime_file_when_status_is_recent(
+    queue: Queue,
+    sample_sms: IncomingSms,
+    state_dir: Path,
+) -> None:
+    item = await enqueue_claim_and_mark_sent(queue, sample_sms)
+    path = queue._dirs["sent"] / f"{item.id}.json"
+    os.utime(path, (old_timestamp(), old_timestamp()))
+
+    removed = await queue.cleanup_sent(max_age_days=30)
+
+    assert removed == 0
+    assert path.exists()
+    assert await dedup_count(state_dir / "dedup.db", sample_sms.content_hash()) == 1
+
+
 async def test_cleanup_failed_removes_old_files_and_purges_dedup_rows(
     queue: Queue,
     sample_sms: IncomingSms,

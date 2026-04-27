@@ -135,6 +135,30 @@ async def test_delete_by_item_id_deletes_matching_row_and_returns_count(tmp_path
     await store.close()
 
 
+async def test_item_ids_older_than_returns_only_matching_status_older_than_cutoff(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "dedup.db"
+    old_timestamp = (datetime.now(UTC) - timedelta(days=31)).timestamp()
+    recent_timestamp = datetime.now(UTC).timestamp()
+    store = DedupStore(db_path)
+    await store.initialize()
+    await store.record_new("old-sent", "item-1")
+    await store.record_new("recent-sent", "item-2")
+    await store.record_new("old-failed", "item-3")
+    await store.update_status("old-sent", ItemStatus.SENT)
+    await store.update_status("recent-sent", ItemStatus.SENT)
+    await store.update_status("old-failed", ItemStatus.FAILED)
+    await set_last_status_at(db_path, "old-sent", old_timestamp)
+    await set_last_status_at(db_path, "recent-sent", recent_timestamp)
+    await set_last_status_at(db_path, "old-failed", old_timestamp)
+
+    item_ids = await store.item_ids_older_than(ItemStatus.SENT, 30)
+
+    assert item_ids == ["item-1"]
+    await store.close()
+
+
 async def test_purge_older_than_deletes_only_matching_status_older_than_cutoff(
     tmp_path: Path,
 ) -> None:

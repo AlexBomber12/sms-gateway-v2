@@ -97,6 +97,21 @@ class DedupStore:
         await connection.commit()
         return cursor.rowcount
 
+    async def item_ids_older_than(self, status: ItemStatus, max_age_days: int) -> list[str]:
+        connection = self._connection_or_raise()
+        cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).timestamp()
+        cursor = await connection.execute(
+            """
+            SELECT item_id FROM seen_messages
+            WHERE status = ? AND last_status_at < ?
+            ORDER BY item_id
+            """,
+            (status.value, cutoff),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [str(row[0]) for row in rows]
+
     async def purge_older_than(self, status: ItemStatus, max_age_days: int) -> int:
         connection = self._connection_or_raise()
         cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).timestamp()
