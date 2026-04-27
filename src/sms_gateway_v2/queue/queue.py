@@ -60,7 +60,10 @@ class Queue:
                 )
                 return None
 
-            duplicate_item = await self._find_pending_duplicate(content_hash)
+            duplicate_item = await self._find_pending_duplicate(
+                content_hash,
+                started_at=started_at,
+            )
             if duplicate_item is not None:
                 with suppress(DuplicateMessage):
                     await self._dedup.record_new(content_hash, duplicate_item.id)
@@ -360,12 +363,27 @@ class Queue:
         payload = f"{sms.number}|{sms.text}|{bucket}"
         return hashlib.sha256(payload.encode()).hexdigest()
 
-    async def _find_pending_duplicate(self, content_hash: str) -> QueueItem | None:
+    async def _find_pending_duplicate(
+        self,
+        content_hash: str,
+        *,
+        started_at: float,
+    ) -> QueueItem | None:
         pending_paths = await asyncio.to_thread(list_items_sorted, self._dirs["pending"])
         for path in pending_paths:
             try:
                 item = await asyncio.to_thread(load_item, path)
             except QueueCorrupted:
+                continue
+            if item.id != path.stem:
+                logger.warning(
+                    "queue_pending_duplicate_scan_corrupted",
+                    item_id=path.stem,
+                    payload_item_id=item.id,
+                    path=str(path),
+                    error="queue item id does not match filename",
+                    elapsed_ms=_elapsed_ms(started_at),
+                )
                 continue
             if self._content_hash_for_item(item) == content_hash:
                 return item

@@ -4,11 +4,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import aiosqlite
 import pytest
 
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue import DuplicateMessage, Queue, QueueItem
 from sms_gateway_v2.queue.paths import atomic_write_json
+
+
+async def dedup_item_id(db_path: Path, content_hash: str) -> str:
+    async with aiosqlite.connect(db_path) as connection:
+        cursor = await connection.execute(
+            "SELECT item_id FROM seen_messages WHERE content_hash = ?",
+            (content_hash,),
+        )
+        row = await cursor.fetchone()
+    assert row is not None
+    return str(row[0])
 
 
 async def test_queue_initialize_is_idempotent(queue: Queue) -> None:
@@ -133,6 +145,28 @@ async def test_enqueue_duplicate_scan_skips_corrupt_pending_file(
     assert item is not None
     assert corrupt_path.exists()
     assert len(list(queue._dirs["pending"].glob("*.json"))) == 2
+
+
+async def test_enqueue_duplicate_scan_skips_id_mismatched_pending_file(
+    queue: Queue,
+    sample_sms: IncomingSms,
+    state_dir: Path,
+) -> None:
+    mismatched_file_id = "1714149692000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    payload_item_id = "1714149692001-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    mismatched_item = QueueItem(
+        id=payload_item_id,
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+    )
+    mismatched_path = queue._dirs["pending"] / f"{mismatched_file_id}.json"
+    mismatched_path.write_text(mismatched_item.to_json(), encoding="utf-8")
+
+    item = await queue.enqueue(sample_sms)
+
+    assert item is not None
+    assert len(list(queue._dirs["pending"].glob("*.json"))) == 2
+    assert await dedup_item_id(state_dir / "dedup.db", sample_sms.content_hash()) == item.id
 
 
 async def test_enqueue_deduplicates_sms_without_timestamp(
