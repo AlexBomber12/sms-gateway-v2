@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,8 +18,8 @@ class Settings(BaseSettings):
     port: int = 8091
     log_level: str = "INFO"
     state_dir: Path = Path("./state")
-    queue_sent_retention_days: int = 30
-    queue_failed_retention_days: int = 30
+    queue_sent_retention_days: int = Field(default=30, ge=0)
+    queue_failed_retention_days: int = Field(default=30, ge=0)
     dedup_window_minutes: int = 1
 
     @property

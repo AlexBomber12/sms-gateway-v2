@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
+import pytest
 
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue import ItemStatus, Queue, QueueItem
@@ -187,6 +188,21 @@ async def test_cleanup_sent_keeps_old_mtime_file_when_status_is_recent(
     assert await dedup_count(state_dir / "dedup.db", sample_sms.content_hash()) == 1
 
 
+async def test_cleanup_sent_rejects_negative_max_age_without_deleting(
+    queue: Queue,
+    sample_sms: IncomingSms,
+    state_dir: Path,
+) -> None:
+    item = await enqueue_claim_and_mark_sent(queue, sample_sms)
+    path = queue._dirs["sent"] / f"{item.id}.json"
+
+    with pytest.raises(ValueError, match="max_age_days"):
+        await queue.cleanup_sent(max_age_days=-1)
+
+    assert path.exists()
+    assert await dedup_count(state_dir / "dedup.db", sample_sms.content_hash()) == 1
+
+
 async def test_cleanup_failed_removes_old_files_and_purges_dedup_rows(
     queue: Queue,
     sample_sms: IncomingSms,
@@ -208,6 +224,21 @@ async def test_cleanup_failed_removes_old_files_and_purges_dedup_rows(
     assert recent_path.exists()
     assert await dedup_count(state_dir / "dedup.db", old_sms.content_hash()) == 0
     assert await dedup_count(state_dir / "dedup.db", recent_sms.content_hash()) == 1
+
+
+async def test_cleanup_failed_rejects_negative_max_age_without_deleting(
+    queue: Queue,
+    sample_sms: IncomingSms,
+    state_dir: Path,
+) -> None:
+    item = await enqueue_claim_and_mark_failed(queue, sample_sms)
+    path = queue._dirs["failed"] / f"{item.id}.json"
+
+    with pytest.raises(ValueError, match="max_age_days"):
+        await queue.cleanup_failed(max_age_days=-1)
+
+    assert path.exists()
+    assert await dedup_count(state_dir / "dedup.db", sample_sms.content_hash()) == 1
 
 
 async def test_cleanup_failed_removes_old_unknown_corrupt_files(queue: Queue) -> None:

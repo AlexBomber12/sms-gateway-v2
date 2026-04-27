@@ -292,6 +292,7 @@ class Queue:
             return count
 
     async def cleanup_sent(self, *, max_age_days: int) -> int:
+        _validate_max_age_days(max_age_days)
         started_at = time.monotonic()
         async with self._lock:
             item_ids = await self._dedup.item_ids_older_than(ItemStatus.SENT, max_age_days)
@@ -316,6 +317,7 @@ class Queue:
             return count
 
     async def cleanup_failed(self, *, max_age_days: int) -> int:
+        _validate_max_age_days(max_age_days)
         started_at = time.monotonic()
         async with self._lock:
             item_ids = await self._dedup.item_ids_older_than(ItemStatus.FAILED, max_age_days)
@@ -388,6 +390,11 @@ def _delete_pending_item(path: Path) -> None:
 
 def _elapsed_ms(started_at: float) -> int:
     return int((time.monotonic() - started_at) * 1000)
+
+
+def _validate_max_age_days(max_age_days: int) -> None:
+    if max_age_days < 0:
+        raise ValueError("max_age_days must be greater than or equal to 0")
 
 
 def _remove_item_files(directory: Path, item_ids: list[str]) -> int:

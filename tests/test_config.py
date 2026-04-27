@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from sms_gateway_v2.config import Settings, get_settings
 
@@ -52,3 +53,25 @@ def test_settings_env_overrides_defaults(
     assert settings.queue_failed_retention_days == 20
     assert settings.dedup_window_minutes == 5
     assert settings.dedup_db_path == tmp_path / "custom-state" / "dedup.db"
+
+
+@pytest.mark.parametrize(
+    ("env_name", "field_name"),
+    [
+        ("QUEUE_SENT_RETENTION_DAYS", "queue_sent_retention_days"),
+        ("QUEUE_FAILED_RETENTION_DAYS", "queue_failed_retention_days"),
+    ],
+)
+def test_settings_rejects_negative_queue_retention_days(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    env_name: str,
+    field_name: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("QUEUE_SENT_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("QUEUE_FAILED_RETENTION_DAYS", raising=False)
+    monkeypatch.setenv(env_name, "-1")
+
+    with pytest.raises(ValidationError, match=field_name):
+        Settings()
