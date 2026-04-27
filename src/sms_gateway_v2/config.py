@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     telegram_timeout_seconds: float = Field(default=10.0, ge=0.1)
     telegram_max_retries: int = Field(default=3, ge=1)
     metrics_path: str = "/metrics"
+
+    @field_validator("metrics_path")
+    @classmethod
+    def validate_metrics_path(cls, value: str) -> str:
+        if not value.startswith("/"):
+            msg = "metrics_path must start with '/'"
+            raise ValueError(msg)
+        return value
 
     @property
     def dedup_db_path(self) -> Path:

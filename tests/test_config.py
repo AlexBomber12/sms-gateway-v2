@@ -138,3 +138,14 @@ def test_settings_rejects_non_positive_telegram_max_retries(
 
     with pytest.raises(ValidationError, match="telegram_max_retries"):
         Settings()
+
+
+def test_settings_rejects_metrics_path_without_leading_slash(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("METRICS_PATH", "metrics")
+
+    with pytest.raises(ValidationError, match="metrics_path"):
+        Settings()

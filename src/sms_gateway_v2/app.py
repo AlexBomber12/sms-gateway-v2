@@ -41,6 +41,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app.state.settings = settings
     app.state.metrics = MetricsRegistry()
-    app.add_api_route(settings.metrics_path, metrics_endpoint, methods=["GET"])
+    metrics_path = settings.metrics_path
+    app.add_api_route(metrics_path, metrics_endpoint, methods=["GET"])
     app.include_router(router)
     return app
