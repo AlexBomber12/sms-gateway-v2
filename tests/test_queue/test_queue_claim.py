@@ -95,6 +95,29 @@ async def test_claim_next_on_corrupt_enqueued_file_removes_dedup_row(
     assert await queue.enqueue(sample_sms) is not None
 
 
+async def test_claim_next_on_malformed_content_hash_moves_to_failed_and_tries_next(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    corrupt = make_item(
+        sample_sms,
+        "1714149692000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        text="malformed hash",
+    ).model_copy(update={"content_hash": "a" * 64})
+    corrupt_path = queue._dirs["pending"] / f"{corrupt.id}.json"
+    corrupt_path.write_text(corrupt.to_json().replace("a" * 64, "not-a-sha256"), encoding="utf-8")
+    valid = make_item(sample_sms, "1714149693000-0123456789abcdef0123456789abcdef")
+    atomic_write_json(valid, queue._dirs)
+    await queue._dedup.record_new(valid.sms.content_hash(), valid.id)
+
+    claimed = await queue.claim_next()
+
+    assert claimed == valid
+    assert not corrupt_path.exists()
+    assert (queue._dirs["failed"] / corrupt_path.name).exists()
+    assert (queue._dirs["processing"] / f"{valid.id}.json").exists()
+
+
 async def test_claim_next_on_id_mismatch_moves_file_to_failed_and_tries_next(
     queue: Queue,
     sample_sms: IncomingSms,

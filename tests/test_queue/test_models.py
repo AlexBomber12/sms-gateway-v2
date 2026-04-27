@@ -27,7 +27,7 @@ def test_queue_item_json_round_trips(sample_sms: IncomingSms) -> None:
         id="1714149693000-0123456789abcdef0123456789abcdef",
         sms=sample_sms,
         first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
-        content_hash="abc123",
+        content_hash="a" * 64,
     )
 
     restored = QueueItem.from_json(item.to_json())
@@ -38,3 +38,18 @@ def test_queue_item_json_round_trips(sample_sms: IncomingSms) -> None:
 def test_queue_item_from_json_raises_queue_corrupted_on_invalid_json() -> None:
     with pytest.raises(QueueCorrupted, match="invalid queue item JSON"):
         QueueItem.from_json("{not-json")
+
+
+def test_queue_item_from_json_raises_queue_corrupted_on_invalid_content_hash(
+    sample_sms: IncomingSms,
+) -> None:
+    item = QueueItem(
+        id="1714149693000-0123456789abcdef0123456789abcdef",
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+        content_hash="a" * 64,
+    )
+    payload = item.to_json().replace("a" * 64, "not-a-sha256")
+
+    with pytest.raises(QueueCorrupted, match="content_hash"):
+        QueueItem.from_json(payload)

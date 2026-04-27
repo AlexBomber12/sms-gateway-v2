@@ -103,7 +103,7 @@ async def test_with_content_hash_preserves_existing_hash(
         id="1714149693000-0123456789abcdef0123456789abcdef",
         sms=sample_sms,
         first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
-        content_hash="persisted-hash",
+        content_hash="a" * 64,
     )
 
     assert queue._with_content_hash(item) == item

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 import time
 from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue.exceptions import QueueCorrupted
@@ -28,6 +29,15 @@ class QueueItem(BaseModel):
     attempts: int = 0
     last_attempt_at: datetime | None = None
     next_retry_at: datetime | None = None
+
+    @field_validator("content_hash")
+    @classmethod
+    def validate_content_hash(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError("content_hash must be a lowercase SHA-256 hex digest")
+        return value
 
     @classmethod
     def new(cls, sms: IncomingSms) -> QueueItem:
