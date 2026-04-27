@@ -78,7 +78,7 @@ class TelegramClient:
             )
             try:
                 response = await client.post(
-                    "/sendMessage",
+                    "sendMessage",
                     json={
                         "chat_id": self.chat_id,
                         "text": message.text,
@@ -140,7 +140,7 @@ class TelegramClient:
         status_code = response.status_code
         if status_code == 200:
             payload = _response_json(response)
-            if payload.get("ok") is True:
+            if payload is not None and payload.get("ok") is True:
                 logger.info(
                     "telegram_send_success",
                     attempt=attempt,
@@ -148,32 +148,44 @@ class TelegramClient:
                     duration_ms=duration_ms,
                 )
                 return
-            error = TelegramError(_description(payload, "Telegram API request failed"))
+            if payload is None:
+                transport_error = TelegramTransportError(
+                    "Telegram API returned invalid JSON response"
+                )
+                logger.warning(
+                    "telegram_send_transport_error",
+                    attempt=attempt,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    error=str(transport_error),
+                )
+                raise transport_error
+            api_error = TelegramError(_description(payload, "Telegram API request failed"))
             logger.warning(
                 "telegram_send_giving_up",
                 attempt=attempt,
                 status_code=status_code,
                 duration_ms=duration_ms,
-                error=str(error),
+                error=str(api_error),
             )
-            raise error
+            raise api_error
 
         if status_code == 401:
             payload = _response_json(response)
-            error = TelegramAuthError(_description(payload, "Telegram authentication failed"))
+            auth_error = TelegramAuthError(_description(payload, "Telegram authentication failed"))
             logger.warning(
                 "telegram_send_auth_failed",
                 attempt=attempt,
                 status_code=status_code,
                 duration_ms=duration_ms,
-                error=str(error),
+                error=str(auth_error),
             )
-            raise error
+            raise auth_error
 
         if status_code == 429:
             payload = _response_json(response)
             retry_after = _retry_after(payload)
-            error = TelegramRateLimited(
+            rate_limit_error = TelegramRateLimited(
                 _description(payload, "Telegram rate limited"),
                 retry_after=retry_after,
             )
@@ -183,31 +195,33 @@ class TelegramClient:
                 status_code=status_code,
                 duration_ms=duration_ms,
                 retry_after=retry_after,
-                error=str(error),
+                error=str(rate_limit_error),
             )
-            raise error
+            raise rate_limit_error
 
         if status_code >= RETRYABLE_HTTP_STATUS:
-            error = TelegramTransportError(f"Telegram API returned HTTP {status_code}")
+            transport_error = TelegramTransportError(f"Telegram API returned HTTP {status_code}")
             logger.warning(
                 "telegram_send_transport_error",
                 attempt=attempt,
                 status_code=status_code,
                 duration_ms=duration_ms,
-                error=str(error),
+                error=str(transport_error),
             )
-            raise error
+            raise transport_error
 
         payload = _response_json(response)
-        error = TelegramError(_description(payload, f"Telegram API returned HTTP {status_code}"))
+        api_error = TelegramError(
+            _description(payload, f"Telegram API returned HTTP {status_code}")
+        )
         logger.warning(
             "telegram_send_giving_up",
             attempt=attempt,
             status_code=status_code,
             duration_ms=duration_ms,
-            error=str(error),
+            error=str(api_error),
         )
-        raise error
+        raise api_error
 
     async def _retry_or_raise(
         self,
@@ -237,23 +251,31 @@ class TelegramClient:
         await asyncio.sleep(delay_seconds)
 
 
-def _response_json(response: httpx.Response) -> dict[str, object]:
-    return cast(dict[str, object], response.json())
+def _response_json(response: httpx.Response) -> dict[str, object] | None:
+    try:
+        payload: object = response.json()
+    except ValueError:
+        return None
+    if isinstance(payload, dict):
+        return cast(dict[str, object], payload)
+    return None
 
 
-def _description(payload: dict[str, object], default: str) -> str:
-    description = payload.get("description")
-    if isinstance(description, str):
-        return description
+def _description(payload: dict[str, object] | None, default: str) -> str:
+    if payload is not None:
+        description = payload.get("description")
+        if isinstance(description, str):
+            return description
     return default
 
 
-def _retry_after(payload: dict[str, object]) -> float:
-    parameters = payload.get("parameters")
-    if isinstance(parameters, dict):
-        retry_after = parameters.get("retry_after")
-        if isinstance(retry_after, int | float):
-            return float(retry_after)
+def _retry_after(payload: dict[str, object] | None) -> float:
+    if payload is not None:
+        parameters = payload.get("parameters")
+        if isinstance(parameters, dict):
+            retry_after = parameters.get("retry_after")
+            if isinstance(retry_after, int | float):
+                return float(retry_after)
     return 1.0
 
 

@@ -25,6 +25,14 @@ def ok_response() -> httpx.Response:
     return telegram_response(200, {"ok": True})
 
 
+def non_json_response(status_code: int) -> httpx.Response:
+    return httpx.Response(status_code=status_code, text="not-json")
+
+
+def non_object_json_response(status_code: int) -> httpx.Response:
+    return httpx.Response(status_code=status_code, json=["not", "an", "object"])
+
+
 async def send_with_post_side_effects(
     monkeypatch: pytest.MonkeyPatch,
     side_effects: Sequence[httpx.Response | Exception],
@@ -49,7 +57,7 @@ async def test_send_message_returns_successfully_on_ok_response(
     post, sleep = await send_with_post_side_effects(monkeypatch, [ok_response()])
 
     post.assert_awaited_once_with(
-        "/sendMessage",
+        "sendMessage",
         json={"chat_id": "-100", "text": "hello", "parse_mode": "HTML"},
     )
     sleep.assert_not_awaited()
@@ -65,7 +73,7 @@ async def test_send_message_uses_configured_chat_id(
         await client.send_message(TelegramMessage(chat_id="-message", text="hello"))
 
     post.assert_awaited_once_with(
-        "/sendMessage",
+        "sendMessage",
         json={"chat_id": "-configured", "text": "hello", "parse_mode": "HTML"},
     )
 
@@ -179,6 +187,30 @@ async def test_send_message_retries_network_error(
     assert sleep.await_args_list == [call(1.0)]
 
 
+async def test_send_message_retries_non_json_200_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post, sleep = await send_with_post_side_effects(
+        monkeypatch,
+        [non_json_response(200), ok_response()],
+    )
+
+    assert post.await_count == 2
+    assert sleep.await_args_list == [call(1.0)]
+
+
+async def test_send_message_retries_non_object_json_200_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post, sleep = await send_with_post_side_effects(
+        monkeypatch,
+        [non_object_json_response(200), ok_response()],
+    )
+
+    assert post.await_count == 2
+    assert sleep.await_args_list == [call(1.0)]
+
+
 async def test_send_message_exhausting_500_retries_raises_transport_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -221,6 +253,34 @@ async def test_send_message_raises_telegram_error_for_other_http_status(
     async with TelegramClient("token", "-100") as client:
         with pytest.raises(TelegramError, match="HTTP 400"):
             await client.send_message(TelegramMessage(chat_id="-100", text="hello"))
+
+
+async def test_send_message_raises_auth_error_for_non_json_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post = AsyncMock(side_effect=[non_json_response(401)])
+    sleep = AsyncMock()
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    monkeypatch.setattr("sms_gateway_v2.telegram.client.asyncio.sleep", sleep)
+
+    async with TelegramClient("token", "-100") as client:
+        with pytest.raises(TelegramAuthError, match="authentication failed"):
+            await client.send_message(TelegramMessage(chat_id="-100", text="hello"))
+
+    assert post.await_count == 1
+    sleep.assert_not_awaited()
+
+
+async def test_send_message_retries_non_json_429_with_default_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post, sleep = await send_with_post_side_effects(
+        monkeypatch,
+        [non_json_response(429), ok_response()],
+    )
+
+    assert post.await_count == 2
+    assert sleep.await_args_list == [call(1.0)]
 
 
 def test_constructor_raises_value_error_on_empty_bot_token() -> None:
