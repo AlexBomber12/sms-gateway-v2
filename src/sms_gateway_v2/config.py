@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -26,7 +27,32 @@ class Settings(BaseSettings):
     telegram_api_base: str = "https://api.telegram.org"
     telegram_timeout_seconds: float = Field(default=10.0, ge=0.1)
     telegram_max_retries: int = Field(default=3, ge=1)
+    worker_retry_schedule_seconds: Annotated[tuple[int, ...], NoDecode] = Field(
+        default=(5, 30, 300, 1800, 7200, 21600, 86400)
+    )
     metrics_path: str = "/metrics"
+
+    @field_validator("worker_retry_schedule_seconds", mode="before")
+    @classmethod
+    def parse_worker_retry_schedule_seconds(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        try:
+            return tuple(int(part.strip()) for part in value.split(",") if part.strip())
+        except ValueError as exc:
+            msg = "worker_retry_schedule_seconds must be a comma-separated list of integers"
+            raise ValueError(msg) from exc
+
+    @field_validator("worker_retry_schedule_seconds")
+    @classmethod
+    def validate_worker_retry_schedule_seconds(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if len(value) == 0:
+            msg = "worker_retry_schedule_seconds must not be empty"
+            raise ValueError(msg)
+        if any(delay <= 0 for delay in value):
+            msg = "worker_retry_schedule_seconds values must be positive integers"
+            raise ValueError(msg)
+        return value
 
     @field_validator("metrics_path")
     @classmethod
