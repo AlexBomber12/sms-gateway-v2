@@ -42,7 +42,9 @@ class Queue:
             self._dirs = dirs
 
     async def close(self) -> None:
-        await self._dedup.close()
+        async with self._lock:
+            await self._dedup.close()
+            self._dirs = {}
 
     async def enqueue(self, sms: IncomingSms) -> QueueItem | None:
         started_at = time.monotonic()

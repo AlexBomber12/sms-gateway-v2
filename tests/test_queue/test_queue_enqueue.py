@@ -29,6 +29,23 @@ async def test_queue_initialize_retries_when_dedup_initialize_fails(state_dir: P
     assert queue._dedup.initialize.await_count == 2
 
 
+async def test_queue_can_reinitialize_after_close(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+    await queue.initialize()
+    await queue.close()
+    await queue.initialize()
+    try:
+        item = await queue.enqueue(sample_sms)
+
+        assert item is not None
+        assert (queue._dirs["pending"] / f"{item.id}.json").exists()
+    finally:
+        await queue.close()
+
+
 async def test_enqueue_new_sms_returns_item_and_creates_pending_file(
     queue: Queue,
     sample_sms: IncomingSms,
