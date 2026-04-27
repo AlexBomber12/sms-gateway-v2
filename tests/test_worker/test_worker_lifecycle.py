@@ -25,12 +25,11 @@ async def test_stop_set_before_run_exits_without_processing(
     telegram_client.send_message.assert_not_awaited()
 
 
-async def test_wakeup_unblocks_idle_wait(worker: DeliveryWorker) -> None:
+async def test_stop_unblocks_idle_wait(worker: DeliveryWorker) -> None:
     task = asyncio.create_task(worker.run())
     await asyncio.sleep(0)
 
     worker.stop()
-    worker.wakeup()
     await asyncio.wait_for(task, timeout=1.0)
 
 

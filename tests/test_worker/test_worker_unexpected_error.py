@@ -27,6 +27,7 @@ async def test_unexpected_send_error_moves_item_to_failed_and_logs(
 
     assert (queue._dirs["failed"] / f"{item.id}.json").exists()
     assert metric_value(metrics, "sms_failed_total") == 1.0
+    assert metric_value(metrics, "telegram_send_total", {"result": "failure"}) == 1.0
     assert metric_value(metrics, "telegram_send_failures_total", {"reason": "exhausted"}) == 1.0
     logger.exception.assert_called_once_with(
         "delivery_unexpected_error",

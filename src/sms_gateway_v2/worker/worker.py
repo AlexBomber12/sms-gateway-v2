@@ -134,6 +134,7 @@ class DeliveryWorker:
                 error=str(exc),
             )
             self._metrics.sms_failed_total.inc()
+            self._metrics.telegram_send_total.labels(result="failure").inc()
             self._metrics.telegram_send_failures_total.labels(reason="exhausted").inc()
             await self._queue.mark_failed(item)
             return True
@@ -152,6 +153,7 @@ class DeliveryWorker:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._wakeup_event.set()
 
     def wakeup(self) -> None:
         self._wakeup_event.set()
