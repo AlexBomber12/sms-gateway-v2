@@ -12,7 +12,6 @@ from sms_gateway_v2.modem import (
     IncomingSms,
     MessageDeleteFailed,
     ModemManagerClient,
-    ModemManagerUnavailable,
 )
 from sms_gateway_v2.queue import Queue
 from sms_gateway_v2.telegram import TelegramClient
@@ -50,22 +49,29 @@ class SmsRelay:
             raise RelayError("relay is already started or in transition")
 
         self._status = "starting"
+        connected = False
+        queue_initialized = False
         try:
             await self._modem_client.connect()
-        except ModemManagerUnavailable as exc:
-            self._last_error = str(exc)
-            self._status = "stopped"
+            connected = True
+            await self._queue.initialize()
+            queue_initialized = True
+            recovered = await self._queue.recover_processing()
+            logger.info("relay_recovery_completed", count=recovered)
+            await self._modem_client.watch_added(self._on_new_sms)
+            await self._drain_existing_messages()
+            self._worker.reset()
+            self._worker_task = asyncio.create_task(self._worker.run())
+            self._worker_task.add_done_callback(self._log_worker_task_result)
+            self._started_at = datetime.now(UTC)
+            self._status = "running"
+        except Exception as exc:
+            await self._rollback_startup_failure(
+                exc,
+                connected=connected,
+                queue_initialized=queue_initialized,
+            )
             raise
-
-        await self._queue.initialize()
-        recovered = await self._queue.recover_processing()
-        logger.info("relay_recovery_completed", count=recovered)
-        await self._modem_client.watch_added(self._on_new_sms)
-        await self._drain_existing_messages()
-        self._worker_task = asyncio.create_task(self._worker.run())
-        self._worker_task.add_done_callback(self._log_worker_task_result)
-        self._started_at = datetime.now(UTC)
-        self._status = "running"
         logger.info(
             "relay_started",
             started_at=self._started_at,
@@ -151,6 +157,24 @@ class SmsRelay:
     async def _find_sms_by_path(self, sms_path: str) -> IncomingSms | None:
         messages = await self._modem_client.list_messages()
         return next((message for message in messages if message.object_path == sms_path), None)
+
+    async def _rollback_startup_failure(
+        self,
+        exc: Exception,
+        *,
+        connected: bool,
+        queue_initialized: bool,
+    ) -> None:
+        self._last_error = str(exc)
+        if connected:
+            with suppress(Exception):
+                await self._modem_client.disconnect()
+        if queue_initialized:
+            with suppress(Exception):
+                await self._queue.close()
+        self._worker_task = None
+        self._started_at = None
+        self._status = "stopped"
 
     def _log_worker_task_result(self, task: asyncio.Future[None]) -> None:
         if task.cancelled():

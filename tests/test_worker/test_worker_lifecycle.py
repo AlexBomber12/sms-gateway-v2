@@ -88,10 +88,20 @@ def test_delivery_worker_has_only_expected_sync_public_methods() -> None:
         if not name.startswith("_") and callable(value)
     }
 
-    assert set(public_methods) == {"run", "stop", "wakeup"}
+    assert set(public_methods) == {"reset", "run", "stop", "wakeup"}
+    assert not inspect.iscoroutinefunction(public_methods["reset"])
     assert inspect.iscoroutinefunction(public_methods["run"])
     assert not inspect.iscoroutinefunction(public_methods["stop"])
     assert not inspect.iscoroutinefunction(public_methods["wakeup"])
+
+
+def test_reset_clears_stop_and_wakeup_events(worker: DeliveryWorker) -> None:
+    worker.stop()
+
+    worker.reset()
+
+    assert not worker._stop_event.is_set()
+    assert not worker._wakeup_event.is_set()
 
 
 async def test_process_one_pending_item_propagates_queue_claim_errors_to_run(

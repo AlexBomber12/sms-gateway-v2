@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -132,3 +133,16 @@ def sms_factory() -> SmsFactory:
 @pytest.fixture
 def sample_sms(sms_factory: SmsFactory) -> IncomingSms:
     return sms_factory()
+
+
+@pytest.fixture
+def wait_until() -> Callable[[Callable[[], bool]], Awaitable[None]]:
+    async def _wait_until(predicate: Callable[[], bool]) -> None:
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while asyncio.get_running_loop().time() < deadline:
+            if predicate():
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("condition was not met before timeout")
+
+    return _wait_until

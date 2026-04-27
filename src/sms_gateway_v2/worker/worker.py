@@ -148,6 +148,10 @@ class DeliveryWorker:
         self._stop_event.set()
         self._wakeup_event.set()
 
+    def reset(self) -> None:
+        self._stop_event.clear()
+        self._wakeup_event.clear()
+
     def wakeup(self) -> None:
         self._wakeup_event.set()
 
