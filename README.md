@@ -8,7 +8,7 @@ survival during long periods of inactivity.
 
 ## Status
 
-Sprint 4 of 8: Telegram client and Prometheus metrics.
+Sprint 5a of 8: delivery worker with retry scheduling.
 
 ## Hardware Target
 
@@ -87,8 +87,8 @@ pytest
 1. [x] Skeleton and CI.
 2. [x] ModemManager D-Bus client with mocked tests.
 3. [x] Durable file queue and SQLite deduplication.
-4. [ ] Telegram client and Prometheus metrics.
-5. [ ] Delivery worker wiring modem queue and telegram with exponential backoff.
+4. [x] Telegram client and Prometheus metrics.
+5. [ ] Delivery worker (split into 5a and 5b).
 6. [ ] Dockerfile and deploy compose.
 7. [ ] Active modem healthcheck and dead-man heartbeat.
 8. [ ] Production cutover from AI-Server.

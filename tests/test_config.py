@@ -22,6 +22,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.delenv("TELEGRAM_API_BASE", raising=False)
     monkeypatch.delenv("TELEGRAM_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("TELEGRAM_MAX_RETRIES", raising=False)
+    monkeypatch.delenv("WORKER_RETRY_SCHEDULE_SECONDS", raising=False)
     monkeypatch.delenv("METRICS_PATH", raising=False)
 
     settings = Settings()
@@ -38,6 +39,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.telegram_api_base == "https://api.telegram.org"
     assert settings.telegram_timeout_seconds == 10.0
     assert settings.telegram_max_retries == 3
+    assert settings.worker_retry_schedule_seconds == (5, 30, 300, 1800, 7200, 21600, 86400)
     assert settings.metrics_path == "/metrics"
     assert settings.dedup_db_path == Path("./state/dedup.db")
 
@@ -59,6 +61,7 @@ def test_settings_env_overrides_defaults(
     monkeypatch.setenv("TELEGRAM_API_BASE", "https://telegram.example")
     monkeypatch.setenv("TELEGRAM_TIMEOUT_SECONDS", "2.5")
     monkeypatch.setenv("TELEGRAM_MAX_RETRIES", "5")
+    monkeypatch.setenv("WORKER_RETRY_SCHEDULE_SECONDS", "1,2,4")
     monkeypatch.setenv("METRICS_PATH", "/custom-metrics")
 
     settings = get_settings()
@@ -75,6 +78,7 @@ def test_settings_env_overrides_defaults(
     assert settings.telegram_api_base == "https://telegram.example"
     assert settings.telegram_timeout_seconds == 2.5
     assert settings.telegram_max_retries == 5
+    assert settings.worker_retry_schedule_seconds == (1, 2, 4)
     assert settings.metrics_path == "/custom-metrics"
     assert settings.dedup_db_path == tmp_path / "custom-state" / "dedup.db"
 
@@ -137,6 +141,30 @@ def test_settings_rejects_non_positive_telegram_max_retries(
     monkeypatch.setenv("TELEGRAM_MAX_RETRIES", value)
 
     with pytest.raises(ValidationError, match="telegram_max_retries"):
+        Settings()
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "1,0", "1,-1"])
+def test_settings_rejects_invalid_worker_retry_schedule_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    value: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WORKER_RETRY_SCHEDULE_SECONDS", value)
+
+    with pytest.raises(ValidationError, match="worker_retry_schedule_seconds"):
+        Settings()
+
+
+def test_settings_rejects_non_integer_worker_retry_schedule_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WORKER_RETRY_SCHEDULE_SECONDS", "1,nope")
+
+    with pytest.raises(ValidationError, match="worker_retry_schedule_seconds"):
         Settings()
 
 

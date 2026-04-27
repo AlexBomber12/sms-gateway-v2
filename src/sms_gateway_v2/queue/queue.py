@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
+from collections.abc import Collection
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -107,12 +108,19 @@ class Queue:
             )
             return item
 
-    async def claim_next(self) -> QueueItem | None:
+    async def claim_next(
+        self,
+        *,
+        skip_item_ids: Collection[str] | None = None,
+    ) -> QueueItem | None:
         started_at = time.monotonic()
+        skipped_item_ids = frozenset(skip_item_ids or ())
         async with self._lock:
             self._dirs_or_raise()
             pending_paths = await asyncio.to_thread(list_items_sorted, self._dirs["pending"])
             for path in pending_paths:
+                if path.stem in skipped_item_ids:
+                    continue
                 try:
                     item = await asyncio.to_thread(load_item, path)
                 except QueueCorrupted as exc:
@@ -371,6 +379,16 @@ class Queue:
             return item.content_hash
         fallback_timestamp = item.first_seen_at
         return self._content_hash(item.sms, fallback_timestamp=fallback_timestamp)
+
+    def content_hash_for_sms(
+        self,
+        sms: IncomingSms,
+        *,
+        fallback_timestamp: datetime | None = None,
+    ) -> str:
+        if fallback_timestamp is None:
+            fallback_timestamp = datetime.now(UTC)
+        return self._content_hash(sms, fallback_timestamp=fallback_timestamp)
 
     def _current_content_hash_for_item(self, item: QueueItem) -> str:
         return self._content_hash(item.sms, fallback_timestamp=item.first_seen_at)
