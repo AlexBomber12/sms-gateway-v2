@@ -118,6 +118,25 @@ async def test_claim_next_on_id_mismatch_moves_file_to_failed_and_tries_next(
     assert await queue._dedup.is_duplicate(mismatched_item.sms.content_hash()) is False
 
 
+async def test_claim_next_on_id_mismatch_removes_payload_id_dedup_row(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    mismatched_file_id = "1714149692000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    payload_item_id = "1714149692001-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    mismatched_item = make_item(sample_sms, payload_item_id)
+    mismatched_path = queue._dirs["pending"] / f"{mismatched_file_id}.json"
+    mismatched_path.write_text(mismatched_item.to_json(), encoding="utf-8")
+    await queue._dedup.record_new(mismatched_item.sms.content_hash(), payload_item_id)
+
+    claimed = await queue.claim_next()
+
+    assert claimed is None
+    assert (queue._dirs["failed"] / mismatched_path.name).exists()
+    assert await queue._dedup.is_duplicate(mismatched_item.sms.content_hash()) is False
+    assert await queue.enqueue(sample_sms) is not None
+
+
 async def test_claim_next_updates_dedup_status_to_processing(
     queue: Queue,
     sample_sms: IncomingSms,

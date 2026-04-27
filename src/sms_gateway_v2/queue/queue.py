@@ -144,9 +144,12 @@ class Queue:
                         self._dirs["failed"],
                     )
                     dedup_rows_removed = await self._dedup.delete_by_item_id(item_id)
+                    if not await asyncio.to_thread(_queue_file_exists, item.id, self._dirs):
+                        dedup_rows_removed += await self._dedup.delete_by_item_id(item.id)
                     logger.info(
                         "queue_corrupted_item_dedup_removed",
                         item_id=item_id,
+                        payload_item_id=item.id,
                         dedup_rows_removed=dedup_rows_removed,
                         elapsed_ms=_elapsed_ms(started_at),
                     )
@@ -404,6 +407,10 @@ class Queue:
 def _delete_pending_item(path: Path) -> None:
     load_item(path)
     path.unlink()
+
+
+def _queue_file_exists(item_id: str, dirs: dict[str, Path]) -> bool:
+    return any((directory / f"{item_id}.json").exists() for directory in dirs.values())
 
 
 def _elapsed_ms(started_at: float) -> int:
