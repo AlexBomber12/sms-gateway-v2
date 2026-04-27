@@ -71,7 +71,7 @@ class TelegramClient:
 
     async def send_message(self, message: TelegramMessage) -> None:
         client = self._client_or_raise()
-        for attempt in range(1, self._max_retries + 1):
+        for attempt in range(1, self.attempts_remaining + 1):
             started_at = time.monotonic()
             logger.info(
                 "telegram_send_attempt",
