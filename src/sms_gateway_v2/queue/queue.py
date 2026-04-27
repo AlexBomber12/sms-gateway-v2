@@ -11,7 +11,12 @@ import structlog
 
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue.dedup import DedupStore
-from sms_gateway_v2.queue.exceptions import DuplicateMessage, ItemNotFound, QueueCorrupted
+from sms_gateway_v2.queue.exceptions import (
+    DuplicateMessage,
+    ItemNotFound,
+    QueueCorrupted,
+    QueueError,
+)
 from sms_gateway_v2.queue.models import ItemStatus, QueueItem
 from sms_gateway_v2.queue.paths import (
     atomic_move,
@@ -56,6 +61,7 @@ class Queue:
         item = self._with_content_hash(QueueItem.new(sms))
         content_hash = self._content_hash_for_item(item)
         async with self._lock:
+            self._dirs_or_raise()
             if await self._dedup.is_duplicate(content_hash):
                 logger.info(
                     "queue_enqueue_skipped_duplicate",
@@ -103,6 +109,7 @@ class Queue:
     async def claim_next(self) -> QueueItem | None:
         started_at = time.monotonic()
         async with self._lock:
+            self._dirs_or_raise()
             pending_paths = await asyncio.to_thread(list_items_sorted, self._dirs["pending"])
             for path in pending_paths:
                 try:
@@ -190,6 +197,7 @@ class Queue:
     async def mark_sent(self, item: QueueItem) -> None:
         started_at = time.monotonic()
         async with self._lock:
+            self._dirs_or_raise()
             await self._move_from_processing(item, self._dirs["sent"])
             await self._dedup.update_status(self._content_hash_for_item(item), ItemStatus.SENT)
             logger.info(
@@ -201,6 +209,7 @@ class Queue:
     async def mark_failed(self, item: QueueItem) -> None:
         started_at = time.monotonic()
         async with self._lock:
+            self._dirs_or_raise()
             await self._move_from_processing(item, self._dirs["failed"])
             await self._dedup.update_status(self._content_hash_for_item(item), ItemStatus.FAILED)
             logger.info(
@@ -220,6 +229,7 @@ class Queue:
             }
         )
         async with self._lock:
+            self._dirs_or_raise()
             if not (self._dirs["processing"] / f"{item.id}.json").exists():
                 raise ItemNotFound(f"queue item not found in processing: {item.id}")
             await asyncio.to_thread(save_item, updated, self._dirs["processing"])
@@ -234,6 +244,7 @@ class Queue:
     async def recover_processing(self) -> int:
         started_at = time.monotonic()
         async with self._lock:
+            self._dirs_or_raise()
             processing_paths = await asyncio.to_thread(
                 list_items_sorted,
                 self._dirs["processing"],
@@ -258,6 +269,7 @@ class Queue:
         started_at = time.monotonic()
         cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
         async with self._lock:
+            self._dirs_or_raise()
             failed_paths = await asyncio.to_thread(list_items_sorted, self._dirs["failed"])
             count = 0
             for path in failed_paths:
@@ -305,6 +317,7 @@ class Queue:
         _validate_max_age_days(max_age_days)
         started_at = time.monotonic()
         async with self._lock:
+            self._dirs_or_raise()
             item_ids = await self._dedup.item_ids_older_than(ItemStatus.SENT, max_age_days)
             known_item_ids = await self._dedup.item_ids()
             count = await asyncio.to_thread(
@@ -330,6 +343,7 @@ class Queue:
         _validate_max_age_days(max_age_days)
         started_at = time.monotonic()
         async with self._lock:
+            self._dirs_or_raise()
             item_ids = await self._dedup.item_ids_older_than(ItemStatus.FAILED, max_age_days)
             known_item_ids = await self._dedup.item_ids()
             count = await asyncio.to_thread(
@@ -356,6 +370,11 @@ class Queue:
             return item.content_hash
         fallback_timestamp = item.first_seen_at
         return self._content_hash(item.sms, fallback_timestamp=fallback_timestamp)
+
+    def _dirs_or_raise(self) -> dict[str, Path]:
+        if not self._dirs:
+            raise QueueError("queue is not initialized")
+        return self._dirs
 
     def _with_content_hash(self, item: QueueItem) -> QueueItem:
         if item.content_hash is not None:

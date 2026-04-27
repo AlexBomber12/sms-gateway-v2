@@ -8,7 +8,7 @@ import aiosqlite
 import pytest
 
 from sms_gateway_v2.modem import IncomingSms
-from sms_gateway_v2.queue import DuplicateMessage, Queue, QueueItem
+from sms_gateway_v2.queue import DuplicateMessage, Queue, QueueError, QueueItem
 from sms_gateway_v2.queue.paths import atomic_write_json
 
 
@@ -27,6 +27,22 @@ async def test_queue_initialize_is_idempotent(queue: Queue) -> None:
     await queue.initialize()
 
     assert queue._dirs["pending"].is_dir()
+
+
+async def test_claim_next_raises_queue_error_before_initialize(state_dir: Path) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+
+    with pytest.raises(QueueError, match="not initialized"):
+        await queue.claim_next()
+
+
+async def test_claim_next_raises_queue_error_after_close(state_dir: Path) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+    await queue.initialize()
+    await queue.close()
+
+    with pytest.raises(QueueError, match="not initialized"):
+        await queue.claim_next()
 
 
 @pytest.mark.parametrize("dedup_window_minutes", [0, -1])
