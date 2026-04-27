@@ -68,7 +68,7 @@ async def test_rate_limit_schedules_retry_after_telegram_cooldown(
     assert metric_value(metrics, "telegram_send_failures_total", {"reason": "rate_limited"}) == 1.0
 
 
-async def test_generic_telegram_error_schedules_retry_with_exhausted_reason(
+async def test_generic_telegram_error_fails_permanently_without_retry(
     queue: Queue,
     telegram_client: MagicMock,
     metrics: MetricsRegistry,
@@ -81,9 +81,10 @@ async def test_generic_telegram_error_schedules_retry_with_exhausted_reason(
 
     assert await worker._process_one_pending_item() is True
 
-    pending_item = load_item(queue._dirs["pending"] / f"{item.id}.json")
-    assert pending_item.attempts == 1
-    assert metric_value(metrics, "sms_failed_total") == 0.0
+    assert (queue._dirs["failed"] / f"{item.id}.json").exists()
+    assert not (queue._dirs["pending"] / f"{item.id}.json").exists()
+    assert metric_value(metrics, "sms_failed_total") == 1.0
+    assert metric_value(metrics, "telegram_send_total", {"result": "failure"}) == 1.0
     assert metric_value(metrics, "telegram_send_failures_total", {"reason": "exhausted"}) == 1.0
 
 

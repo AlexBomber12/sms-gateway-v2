@@ -94,8 +94,22 @@ class DeliveryWorker:
             await self._queue.mark_failed(item)
             return True
         except TelegramError as exc:
-            reason = _telegram_failure_reason(exc)
             attempts_used = item.attempts + 1
+            if not isinstance(exc, TelegramRateLimited | TelegramTransportError):
+                logger.warning(
+                    "delivery_failed_permanent",
+                    item_id=item.id,
+                    attempt=item.attempts,
+                    attempts_used=attempts_used,
+                    reason="exhausted",
+                )
+                self._metrics.sms_failed_total.inc()
+                self._metrics.telegram_send_total.labels(result="failure").inc()
+                self._metrics.telegram_send_failures_total.labels(reason="exhausted").inc()
+                await self._queue.mark_failed(item)
+                return True
+
+            reason = _telegram_failure_reason(exc)
             if item.attempts >= len(self._retry_schedule_seconds):
                 logger.warning(
                     "delivery_failed_permanent",
@@ -168,9 +182,7 @@ class DeliveryWorker:
         await asyncio.to_thread(atomic_move, item.id, dirs["processing"], dirs["pending"])
 
 
-def _telegram_failure_reason(error: TelegramError) -> str:
+def _telegram_failure_reason(error: TelegramRateLimited | TelegramTransportError) -> str:
     if isinstance(error, TelegramRateLimited):
         return "rate_limited"
-    if isinstance(error, TelegramTransportError):
-        return "transport_error"
-    return "exhausted"
+    return "transport_error"
