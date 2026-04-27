@@ -88,6 +88,33 @@ class DedupStore:
         if cursor.rowcount == 0:
             raise ItemNotFound(f"content hash not found in dedup store: {content_hash}")
 
+    async def reconcile_status(
+        self,
+        content_hash: str,
+        item_id: str,
+        status: ItemStatus,
+    ) -> None:
+        connection = self._connection_or_raise()
+        now = _now_epoch()
+        await connection.execute(
+            """
+            INSERT INTO seen_messages (
+                content_hash,
+                item_id,
+                first_seen_at,
+                status,
+                last_status_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(content_hash) DO UPDATE SET
+                status = excluded.status,
+                last_status_at = excluded.last_status_at
+            WHERE seen_messages.status != excluded.status
+            """,
+            (content_hash, item_id, now, status.value, now),
+        )
+        await connection.commit()
+
     async def delete_by_item_id(self, item_id: str) -> int:
         connection = self._connection_or_raise()
         cursor = await connection.execute(

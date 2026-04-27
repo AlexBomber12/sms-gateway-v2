@@ -34,12 +34,14 @@ class Queue:
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
+        started_at = time.monotonic()
         async with self._lock:
             if self._dirs:
                 return
 
             dirs = await asyncio.to_thread(ensure_state_dirs, self._state_dir)
             await self._dedup.initialize()
+            await self._reconcile_terminal_statuses(dirs, started_at=started_at)
             self._dirs = dirs
 
     async def close(self) -> None:
@@ -402,6 +404,70 @@ class Queue:
             )
         except FileNotFoundError as exc:
             raise ItemNotFound(f"queue item not found in processing: {item.id}") from exc
+
+    async def _reconcile_terminal_statuses(
+        self,
+        dirs: dict[str, Path],
+        *,
+        started_at: float,
+    ) -> None:
+        sent_count = await self._reconcile_terminal_dir(
+            dirs["sent"],
+            ItemStatus.SENT,
+            started_at=started_at,
+        )
+        failed_count = await self._reconcile_terminal_dir(
+            dirs["failed"],
+            ItemStatus.FAILED,
+            started_at=started_at,
+        )
+        logger.info(
+            "queue_terminal_reconciliation_completed",
+            sent_count=sent_count,
+            failed_count=failed_count,
+            elapsed_ms=_elapsed_ms(started_at),
+        )
+
+    async def _reconcile_terminal_dir(
+        self,
+        directory: Path,
+        status: ItemStatus,
+        *,
+        started_at: float,
+    ) -> int:
+        paths = await asyncio.to_thread(list_items_sorted, directory)
+        count = 0
+        for path in paths:
+            try:
+                item = await asyncio.to_thread(load_item, path)
+            except QueueCorrupted as exc:
+                logger.warning(
+                    "queue_terminal_item_corrupted",
+                    item_id=path.stem,
+                    status=status.value,
+                    path=str(path),
+                    error=str(exc),
+                    elapsed_ms=_elapsed_ms(started_at),
+                )
+                continue
+            if item.id != path.stem:
+                logger.warning(
+                    "queue_terminal_item_corrupted",
+                    item_id=path.stem,
+                    payload_item_id=item.id,
+                    status=status.value,
+                    path=str(path),
+                    error="queue item id does not match filename",
+                    elapsed_ms=_elapsed_ms(started_at),
+                )
+                continue
+            await self._dedup.reconcile_status(
+                self._content_hash_for_item(item),
+                item.id,
+                status,
+            )
+            count += 1
+        return count
 
 
 def _delete_pending_item(path: Path) -> None:
