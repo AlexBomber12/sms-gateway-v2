@@ -8,6 +8,7 @@ import pytest
 
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue import DuplicateMessage, Queue, QueueItem
+from sms_gateway_v2.queue.paths import atomic_write_json
 
 
 async def test_queue_initialize_is_idempotent(queue: Queue) -> None:
@@ -68,6 +69,56 @@ async def test_enqueue_duplicate_sms_returns_none_and_does_not_create_second_fil
     assert second is None
     assert len(list(queue._dirs["pending"].glob("*.json"))) == 1
     assert await queue._dedup.is_duplicate(sample_sms.content_hash()) is True
+
+
+async def test_enqueue_repairs_orphaned_pending_duplicate(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    orphaned = QueueItem(
+        id="1714149693000-0123456789abcdef0123456789abcdef",
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+    )
+    atomic_write_json(orphaned, queue._dirs)
+
+    duplicate = await queue.enqueue(sample_sms)
+
+    assert duplicate is None
+    assert len(list(queue._dirs["pending"].glob("*.json"))) == 1
+    assert await queue._dedup.is_duplicate(sample_sms.content_hash()) is True
+
+
+async def test_enqueue_orphaned_pending_duplicate_tolerates_repair_race(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    orphaned = QueueItem(
+        id="1714149693000-0123456789abcdef0123456789abcdef",
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+    )
+    atomic_write_json(orphaned, queue._dirs)
+    queue._dedup.record_new = AsyncMock(side_effect=DuplicateMessage("duplicate"))
+
+    duplicate = await queue.enqueue(sample_sms)
+
+    assert duplicate is None
+    assert len(list(queue._dirs["pending"].glob("*.json"))) == 1
+
+
+async def test_enqueue_duplicate_scan_skips_corrupt_pending_file(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    corrupt_path = queue._dirs["pending"] / "1714149692000-bad.json"
+    corrupt_path.write_text("{bad-json", encoding="utf-8")
+
+    item = await queue.enqueue(sample_sms)
+
+    assert item is not None
+    assert corrupt_path.exists()
+    assert len(list(queue._dirs["pending"].glob("*.json"))) == 2
 
 
 async def test_enqueue_deduplicates_sms_without_timestamp(

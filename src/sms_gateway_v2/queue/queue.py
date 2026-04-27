@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -54,6 +55,18 @@ class Queue:
             if await self._dedup.is_duplicate(content_hash):
                 logger.info(
                     "queue_enqueue_skipped_duplicate",
+                    content_hash=content_hash,
+                    elapsed_ms=_elapsed_ms(started_at),
+                )
+                return None
+
+            duplicate_item = await self._find_pending_duplicate(content_hash)
+            if duplicate_item is not None:
+                with suppress(DuplicateMessage):
+                    await self._dedup.record_new(content_hash, duplicate_item.id)
+                logger.info(
+                    "queue_enqueue_skipped_pending_duplicate",
+                    item_id=duplicate_item.id,
                     content_hash=content_hash,
                     elapsed_ms=_elapsed_ms(started_at),
                 )
@@ -299,6 +312,17 @@ class Queue:
         bucket = datetime.fromtimestamp(bucket_seconds, tz=timestamp.tzinfo).isoformat()
         payload = f"{sms.number}|{sms.text}|{bucket}"
         return hashlib.sha256(payload.encode()).hexdigest()
+
+    async def _find_pending_duplicate(self, content_hash: str) -> QueueItem | None:
+        pending_paths = await asyncio.to_thread(list_items_sorted, self._dirs["pending"])
+        for path in pending_paths:
+            try:
+                item = await asyncio.to_thread(load_item, path)
+            except QueueCorrupted:
+                continue
+            if self._content_hash_for_item(item) == content_hash:
+                return item
+        return None
 
     async def _move_from_processing(self, item: QueueItem, dest_dir: Path) -> None:
         try:
