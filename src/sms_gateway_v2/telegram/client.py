@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from types import TracebackType
 from typing import cast
@@ -276,7 +277,11 @@ def _retry_after(payload: dict[str, object] | None) -> float:
         parameters = payload.get("parameters")
         if isinstance(parameters, dict):
             retry_after = parameters.get("retry_after")
-            if isinstance(retry_after, int | float):
+            if (
+                isinstance(retry_after, int | float)
+                and math.isfinite(retry_after)
+                and retry_after > 0
+            ):
                 return float(retry_after)
     return 1.0
 

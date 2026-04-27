@@ -33,6 +33,15 @@ def non_object_json_response(status_code: int) -> httpx.Response:
     return httpx.Response(status_code=status_code, json=["not", "an", "object"])
 
 
+def invalid_retry_after_response(retry_after: str) -> httpx.Response:
+    content = (
+        '{"ok": false, "description": "too many", "parameters": {"retry_after": '
+        + retry_after
+        + "}}"
+    )
+    return httpx.Response(status_code=429, content=content)
+
+
 async def send_with_post_side_effects(
     monkeypatch: pytest.MonkeyPatch,
     side_effects: Sequence[httpx.Response | Exception],
@@ -151,6 +160,46 @@ async def test_send_message_retries_429_with_default_retry_after(
     post, sleep = await send_with_post_side_effects(
         monkeypatch,
         [telegram_response(429, {"ok": False, "description": "too many"}), ok_response()],
+    )
+
+    assert post.await_count == 2
+    assert sleep.await_args_list == [call(1.0)]
+
+
+@pytest.mark.parametrize("retry_after", [-1, 0])
+async def test_send_message_retries_429_with_non_positive_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+    retry_after: int,
+) -> None:
+    post, sleep = await send_with_post_side_effects(
+        monkeypatch,
+        [
+            telegram_response(
+                429,
+                {
+                    "ok": False,
+                    "description": "too many",
+                    "parameters": {"retry_after": retry_after},
+                },
+            ),
+            ok_response(),
+        ],
+    )
+
+    assert post.await_count == 2
+    assert sleep.await_args_list == [call(1.0)]
+
+
+@pytest.mark.parametrize("retry_after", ["Infinity", "NaN"])
+async def test_send_message_retries_429_with_non_finite_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+    retry_after: str,
+) -> None:
+    response = invalid_retry_after_response(retry_after)
+    assert response.json()["parameters"]["retry_after"] != 1.0
+    post, sleep = await send_with_post_side_effects(
+        monkeypatch,
+        [response, ok_response()],
     )
 
     assert post.await_count == 2
