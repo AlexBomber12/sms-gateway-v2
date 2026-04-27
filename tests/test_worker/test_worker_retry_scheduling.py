@@ -8,7 +8,12 @@ from sms_gateway_v2.metrics import MetricsRegistry
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue import Queue, QueueItem
 from sms_gateway_v2.queue.paths import load_item, save_item
-from sms_gateway_v2.telegram import TelegramError, TelegramRateLimited, TelegramTransportError
+from sms_gateway_v2.telegram import (
+    TelegramError,
+    TelegramMessage,
+    TelegramRateLimited,
+    TelegramTransportError,
+)
 from sms_gateway_v2.worker import DeliveryWorker
 from tests.test_worker.helpers import metric_value
 
@@ -115,6 +120,46 @@ async def test_not_yet_due_retry_moves_back_to_pending_without_work(
     assert (queue._dirs["pending"] / f"{item.id}.json").exists()
     assert not (queue._dirs["processing"] / f"{item.id}.json").exists()
     telegram_client.send_message.assert_not_awaited()
+
+
+async def test_not_yet_due_retry_does_not_starve_ready_item(
+    queue: Queue,
+    telegram_client: MagicMock,
+    worker: DeliveryWorker,
+    sample_sms: IncomingSms,
+) -> None:
+    first_seen_at = datetime(2026, 4, 27, 12, 0, tzinfo=UTC)
+    ready_sms = sample_sms.model_copy(
+        update={
+            "object_path": "/org/freedesktop/ModemManager1/SMS/2",
+            "text": "ready",
+        }
+    )
+    deferred = QueueItem(
+        id="100-deferred",
+        sms=sample_sms,
+        first_seen_at=first_seen_at,
+        content_hash=queue.content_hash_for_sms(sample_sms, fallback_timestamp=first_seen_at),
+        attempts=1,
+        next_retry_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    ready = QueueItem(
+        id="200-ready",
+        sms=ready_sms,
+        first_seen_at=first_seen_at,
+        content_hash=queue.content_hash_for_sms(ready_sms, fallback_timestamp=first_seen_at),
+    )
+    await asyncio.to_thread(save_item, deferred, queue._dirs["pending"])
+    await asyncio.to_thread(save_item, ready, queue._dirs["pending"])
+
+    assert await worker._process_one_pending_item() is True
+
+    assert (queue._dirs["pending"] / f"{deferred.id}.json").exists()
+    assert not (queue._dirs["processing"] / f"{deferred.id}.json").exists()
+    assert (queue._dirs["sent"] / f"{ready.id}.json").exists()
+    telegram_client.send_message.assert_awaited_once_with(
+        TelegramMessage.from_sms(chat_id="-100", number=ready_sms.number, text=ready_sms.text)
+    )
 
 
 async def _save_pending_attempts(queue: Queue, item: QueueItem, *, attempts: int) -> QueueItem:

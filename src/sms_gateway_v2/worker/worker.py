@@ -45,9 +45,10 @@ class DeliveryWorker:
                 work_done = await self._process_one_pending_item()
             except Exception as exc:
                 logger.exception("delivery_worker_iteration_failed", error=str(exc))
-                self._metrics.sms_failed_total.inc()
-                self._metrics.telegram_send_failures_total.labels(reason="exhausted").inc()
-                work_done = True
+                work_done = False
+
+            if self._stop_event.is_set():
+                break
 
             if not work_done:
                 with suppress(TimeoutError):
@@ -58,14 +59,18 @@ class DeliveryWorker:
                 self._wakeup_event.clear()
 
     async def _process_one_pending_item(self) -> bool:
-        item = await self._queue.claim_next()
-        if item is None:
-            return False
+        skipped_item_ids: set[str] = set()
+        while True:
+            item = await self._queue.claim_next(skip_item_ids=skipped_item_ids)
+            if item is None:
+                return False
 
-        now = datetime.now(UTC)
-        if item.next_retry_at is not None and now < item.next_retry_at:
+            now = datetime.now(UTC)
+            if item.next_retry_at is None or now >= item.next_retry_at:
+                break
+
+            skipped_item_ids.add(item.id)
             await self._move_processing_to_pending(item)
-            return False
 
         message = TelegramMessage.from_sms(
             chat_id=self._telegram_chat_id,

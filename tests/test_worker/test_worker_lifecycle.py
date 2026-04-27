@@ -50,7 +50,7 @@ async def test_run_empty_queue_handles_idle_timeout(
     await worker.run()
 
 
-async def test_run_logs_and_counts_unexpected_iteration_error(
+async def test_run_logs_unexpected_iteration_error_without_delivery_metrics(
     monkeypatch: pytest.MonkeyPatch,
     metrics: MetricsRegistry,
     worker: DeliveryWorker,
@@ -65,8 +65,8 @@ async def test_run_logs_and_counts_unexpected_iteration_error(
 
     await worker.run()
 
-    assert metric_value(metrics, "sms_failed_total") == 1.0
-    assert metric_value(metrics, "telegram_send_failures_total", {"reason": "exhausted"}) == 1.0
+    assert metric_value(metrics, "sms_failed_total") == 0.0
+    assert metric_value(metrics, "telegram_send_failures_total", {"reason": "exhausted"}) == 0.0
     logger.exception.assert_called_once_with("delivery_worker_iteration_failed", error="boom")
 
 
@@ -101,7 +101,7 @@ async def test_process_one_pending_item_propagates_queue_claim_errors_to_run(
     queue: Queue,
     worker: DeliveryWorker,
 ) -> None:
-    async def fail_claim() -> None:
+    async def fail_claim(**_kwargs: object) -> None:
         worker.stop()
         raise RuntimeError("claim failed")
 
@@ -111,7 +111,8 @@ async def test_process_one_pending_item_propagates_queue_claim_errors_to_run(
 
     await worker.run()
 
-    assert metric_value(metrics, "sms_failed_total") == 1.0
+    assert metric_value(metrics, "sms_failed_total") == 0.0
+    assert metric_value(metrics, "telegram_send_failures_total", {"reason": "exhausted"}) == 0.0
     logger.exception.assert_called_once_with(
         "delivery_worker_iteration_failed",
         error="claim failed",

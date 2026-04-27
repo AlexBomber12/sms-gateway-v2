@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
+from collections.abc import Collection
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -107,12 +108,19 @@ class Queue:
             )
             return item
 
-    async def claim_next(self) -> QueueItem | None:
+    async def claim_next(
+        self,
+        *,
+        skip_item_ids: Collection[str] | None = None,
+    ) -> QueueItem | None:
         started_at = time.monotonic()
+        skipped_item_ids = frozenset(skip_item_ids or ())
         async with self._lock:
             self._dirs_or_raise()
             pending_paths = await asyncio.to_thread(list_items_sorted, self._dirs["pending"])
             for path in pending_paths:
+                if path.stem in skipped_item_ids:
+                    continue
                 try:
                     item = await asyncio.to_thread(load_item, path)
                 except QueueCorrupted as exc:
