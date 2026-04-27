@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -72,14 +73,64 @@ async def test_enqueue_duplicate_sms_returns_none_and_does_not_create_second_fil
 async def test_enqueue_deduplicates_sms_without_timestamp(
     queue: Queue,
     sample_sms: IncomingSms,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sms_without_timestamp = sample_sms.model_copy(update={"timestamp": None})
+    items = iter(
+        [
+            QueueItem(
+                id="1714149665000-0123456789abcdef0123456789abcdef",
+                sms=sms_without_timestamp,
+                first_seen_at=datetime(2026, 4, 26, 10, 41, 5, tzinfo=UTC),
+            ),
+            QueueItem(
+                id="1714149715000-abcdef0123456789abcdef0123456789",
+                sms=sms_without_timestamp,
+                first_seen_at=datetime(2026, 4, 26, 10, 41, 55, tzinfo=UTC),
+            ),
+        ]
+    )
+    monkeypatch.setattr("sms_gateway_v2.queue.queue.QueueItem.new", lambda _sms: next(items))
 
     first = await queue.enqueue(sms_without_timestamp)
     second = await queue.enqueue(sms_without_timestamp)
 
     assert first is not None
     assert second is None
+
+
+async def test_enqueue_missing_timestamp_uses_first_seen_time_bucket(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+    await queue.initialize()
+    sms_without_timestamp = sample_sms.model_copy(update={"timestamp": None})
+    items = iter(
+        [
+            QueueItem(
+                id="1714149665000-0123456789abcdef0123456789abcdef",
+                sms=sms_without_timestamp,
+                first_seen_at=datetime(2026, 4, 26, 10, 41, 5, tzinfo=UTC),
+            ),
+            QueueItem(
+                id="1714149725000-abcdef0123456789abcdef0123456789",
+                sms=sms_without_timestamp,
+                first_seen_at=datetime(2026, 4, 26, 10, 42, 5, tzinfo=UTC),
+            ),
+        ]
+    )
+    monkeypatch.setattr("sms_gateway_v2.queue.queue.QueueItem.new", lambda _sms: next(items))
+    try:
+        first = await queue.enqueue(sms_without_timestamp)
+        second = await queue.enqueue(sms_without_timestamp)
+
+        assert first is not None
+        assert second is not None
+        assert len(list(queue._dirs["pending"].glob("*.json"))) == 2
+    finally:
+        await queue.close()
 
 
 async def test_enqueue_handles_duplicate_race_after_file_write(

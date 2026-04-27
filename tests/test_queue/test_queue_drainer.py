@@ -182,3 +182,14 @@ async def test_cleanup_failed_removes_old_files_and_purges_dedup_rows(
     assert recent_path.exists()
     assert await dedup_count(state_dir / "dedup.db", old_sms.content_hash()) == 0
     assert await dedup_count(state_dir / "dedup.db", recent_sms.content_hash()) == 1
+
+
+async def test_cleanup_failed_removes_old_unknown_corrupt_files(queue: Queue) -> None:
+    corrupt_path = queue._dirs["failed"] / "1714149692000-bad.json"
+    corrupt_path.write_text("{bad-json", encoding="utf-8")
+    os.utime(corrupt_path, (old_timestamp(), old_timestamp()))
+
+    removed = await queue.cleanup_failed(max_age_days=30)
+
+    assert removed == 1
+    assert not corrupt_path.exists()

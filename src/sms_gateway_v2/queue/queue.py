@@ -48,7 +48,8 @@ class Queue:
 
     async def enqueue(self, sms: IncomingSms) -> QueueItem | None:
         started_at = time.monotonic()
-        content_hash = self._content_hash(sms)
+        item = QueueItem.new(sms)
+        content_hash = self._content_hash_for_item(item)
         async with self._lock:
             if await self._dedup.is_duplicate(content_hash):
                 logger.info(
@@ -58,7 +59,6 @@ class Queue:
                 )
                 return None
 
-            item = QueueItem.new(sms)
             await asyncio.to_thread(atomic_write_json, item, self._dirs)
             try:
                 await self._dedup.record_new(content_hash, item.id)
@@ -117,7 +117,7 @@ class Queue:
                     self._dirs["pending"],
                     self._dirs["processing"],
                 )
-                content_hash = self._content_hash(item.sms)
+                content_hash = self._content_hash_for_item(item)
                 try:
                     await self._dedup.update_status(content_hash, ItemStatus.PROCESSING)
                 except ItemNotFound:
@@ -142,7 +142,7 @@ class Queue:
         started_at = time.monotonic()
         async with self._lock:
             await self._move_from_processing(item, self._dirs["sent"])
-            await self._dedup.update_status(self._content_hash(item.sms), ItemStatus.SENT)
+            await self._dedup.update_status(self._content_hash_for_item(item), ItemStatus.SENT)
             logger.info(
                 "queue_item_sent",
                 item_id=item.id,
@@ -153,7 +153,7 @@ class Queue:
         started_at = time.monotonic()
         async with self._lock:
             await self._move_from_processing(item, self._dirs["failed"])
-            await self._dedup.update_status(self._content_hash(item.sms), ItemStatus.FAILED)
+            await self._dedup.update_status(self._content_hash_for_item(item), ItemStatus.FAILED)
             logger.info(
                 "queue_item_failed",
                 item_id=item.id,
@@ -229,7 +229,7 @@ class Queue:
                         self._dirs["pending"],
                     )
                     await self._dedup.update_status(
-                        self._content_hash(item.sms),
+                        self._content_hash_for_item(item),
                         ItemStatus.PENDING,
                     )
                     count += 1
@@ -244,10 +244,17 @@ class Queue:
         started_at = time.monotonic()
         async with self._lock:
             item_ids = await self._dedup.item_ids_older_than(ItemStatus.SENT, max_age_days)
+            known_item_ids = await self._dedup.item_ids()
             count = await asyncio.to_thread(
                 _remove_item_files,
                 self._dirs["sent"],
                 item_ids,
+            )
+            count += await asyncio.to_thread(
+                _remove_unknown_files_older_than,
+                self._dirs["sent"],
+                known_item_ids,
+                max_age_days,
             )
             await self._dedup.purge_older_than(ItemStatus.SENT, max_age_days)
             logger.info(
@@ -261,10 +268,17 @@ class Queue:
         started_at = time.monotonic()
         async with self._lock:
             item_ids = await self._dedup.item_ids_older_than(ItemStatus.FAILED, max_age_days)
+            known_item_ids = await self._dedup.item_ids()
             count = await asyncio.to_thread(
                 _remove_item_files,
                 self._dirs["failed"],
                 item_ids,
+            )
+            count += await asyncio.to_thread(
+                _remove_unknown_files_older_than,
+                self._dirs["failed"],
+                known_item_ids,
+                max_age_days,
             )
             await self._dedup.purge_older_than(ItemStatus.FAILED, max_age_days)
             logger.info(
@@ -274,13 +288,15 @@ class Queue:
             )
             return count
 
-    def _content_hash(self, sms: IncomingSms) -> str:
-        if sms.timestamp is None:
-            bucket = ""
-        else:
-            window_seconds = max(self._dedup_window_minutes, 1) * 60
-            bucket_seconds = int(sms.timestamp.timestamp()) // window_seconds * window_seconds
-            bucket = datetime.fromtimestamp(bucket_seconds, tz=sms.timestamp.tzinfo).isoformat()
+    def _content_hash_for_item(self, item: QueueItem) -> str:
+        fallback_timestamp = item.first_seen_at
+        return self._content_hash(item.sms, fallback_timestamp=fallback_timestamp)
+
+    def _content_hash(self, sms: IncomingSms, *, fallback_timestamp: datetime) -> str:
+        timestamp = sms.timestamp or fallback_timestamp
+        window_seconds = max(self._dedup_window_minutes, 1) * 60
+        bucket_seconds = int(timestamp.timestamp()) // window_seconds * window_seconds
+        bucket = datetime.fromtimestamp(bucket_seconds, tz=timestamp.tzinfo).isoformat()
         payload = f"{sms.number}|{sms.text}|{bucket}"
         return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -310,6 +326,20 @@ def _remove_item_files(directory: Path, item_ids: list[str]) -> int:
     for item_id in item_ids:
         path = directory / f"{item_id}.json"
         if path.exists():
+            path.unlink()
+            count += 1
+    return count
+
+
+def _remove_unknown_files_older_than(
+    directory: Path,
+    known_item_ids: set[str],
+    max_age_days: int,
+) -> int:
+    cutoff = time.time() - (max_age_days * 86_400)
+    count = 0
+    for path in list_items_sorted(directory):
+        if path.stem not in known_item_ids and path.stat().st_mtime < cutoff:
             path.unlink()
             count += 1
     return count
