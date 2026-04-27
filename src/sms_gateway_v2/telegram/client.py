@@ -109,12 +109,7 @@ class TelegramClient:
                     duration_ms=_elapsed_ms(started_at),
                     delay_seconds=_retry_delay(attempt),
                 )
-            except (
-                httpx.TimeoutException,
-                httpx.NetworkError,
-                httpx.ConnectError,
-                httpx.RemoteProtocolError,
-            ) as exc:
+            except httpx.TransportError as exc:
                 transport_error = TelegramTransportError(str(exc))
                 logger.warning(
                     "telegram_send_transport_error",

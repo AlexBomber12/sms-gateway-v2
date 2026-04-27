@@ -251,6 +251,27 @@ async def test_send_message_retries_network_error(
     assert sleep.await_args_list == [call(1.0)]
 
 
+@pytest.mark.parametrize(
+    "transport_error",
+    [
+        httpx.ProxyError("proxy"),
+        httpx.LocalProtocolError("local protocol"),
+        httpx.UnsupportedProtocol("unsupported protocol"),
+    ],
+)
+async def test_send_message_retries_other_transport_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    transport_error: httpx.TransportError,
+) -> None:
+    post, sleep = await send_with_post_side_effects(
+        monkeypatch,
+        [transport_error, ok_response()],
+    )
+
+    assert post.await_count == 2
+    assert sleep.await_args_list == [call(1.0)]
+
+
 async def test_send_message_retries_non_json_200_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
