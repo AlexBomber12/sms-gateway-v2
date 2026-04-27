@@ -43,7 +43,7 @@ class Queue:
 
             dirs = await asyncio.to_thread(ensure_state_dirs, self._state_dir)
             await self._dedup.initialize()
-            await self._reconcile_terminal_statuses(dirs, started_at=started_at)
+            await self._reconcile_startup_statuses(dirs, started_at=started_at)
             self._dirs = dirs
 
     async def close(self) -> None:
@@ -407,30 +407,36 @@ class Queue:
         except FileNotFoundError as exc:
             raise ItemNotFound(f"queue item not found in processing: {item.id}") from exc
 
-    async def _reconcile_terminal_statuses(
+    async def _reconcile_startup_statuses(
         self,
         dirs: dict[str, Path],
         *,
         started_at: float,
     ) -> None:
-        sent_count = await self._reconcile_terminal_dir(
+        pending_count = await self._reconcile_status_dir(
+            dirs["pending"],
+            ItemStatus.PENDING,
+            started_at=started_at,
+        )
+        sent_count = await self._reconcile_status_dir(
             dirs["sent"],
             ItemStatus.SENT,
             started_at=started_at,
         )
-        failed_count = await self._reconcile_terminal_dir(
+        failed_count = await self._reconcile_status_dir(
             dirs["failed"],
             ItemStatus.FAILED,
             started_at=started_at,
         )
         logger.info(
-            "queue_terminal_reconciliation_completed",
+            "queue_startup_reconciliation_completed",
+            pending_count=pending_count,
             sent_count=sent_count,
             failed_count=failed_count,
             elapsed_ms=_elapsed_ms(started_at),
         )
 
-    async def _reconcile_terminal_dir(
+    async def _reconcile_status_dir(
         self,
         directory: Path,
         status: ItemStatus,
@@ -444,7 +450,7 @@ class Queue:
                 item = await asyncio.to_thread(load_item, path)
             except QueueCorrupted as exc:
                 logger.warning(
-                    "queue_terminal_item_corrupted",
+                    "queue_reconciliation_item_corrupted",
                     item_id=path.stem,
                     status=status.value,
                     path=str(path),
@@ -454,7 +460,7 @@ class Queue:
                 continue
             if item.id != path.stem:
                 logger.warning(
-                    "queue_terminal_item_corrupted",
+                    "queue_reconciliation_item_corrupted",
                     item_id=path.stem,
                     payload_item_id=item.id,
                     status=status.value,

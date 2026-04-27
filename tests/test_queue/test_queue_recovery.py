@@ -96,6 +96,33 @@ async def test_initialize_reconciles_failed_file_with_processing_dedup_status(
         await reopened.close()
 
 
+async def test_initialize_reconciles_pending_file_with_failed_dedup_status(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+) -> None:
+    queue = Queue(state_dir, dedup_window_minutes=1)
+    await queue.initialize()
+    item = await queue.enqueue(sample_sms)
+    assert item is not None
+    claimed = await queue.claim_next()
+    assert claimed == item
+    await queue.mark_failed(item)
+    atomic_move(item.id, queue._dirs["failed"], queue._dirs["pending"])
+    assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
+        ItemStatus.FAILED.value
+    )
+    await queue.close()
+
+    reopened = Queue(state_dir, dedup_window_minutes=1)
+    await reopened.initialize()
+    try:
+        assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
+            ItemStatus.PENDING.value
+        )
+    finally:
+        await reopened.close()
+
+
 async def test_initialize_skips_corrupt_terminal_files(
     state_dir: Path,
     sample_sms: IncomingSms,
