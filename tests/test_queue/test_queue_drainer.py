@@ -11,6 +11,7 @@ import pytest
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue import ItemStatus, Queue, QueueItem
 from sms_gateway_v2.queue.paths import atomic_move, atomic_write_json
+from tests.test_queue.helpers import content_hash
 
 
 async def set_last_status_at(db_path: Path, content_hash: str, timestamp: float) -> None:
@@ -78,9 +79,8 @@ async def test_requeue_failed_moves_young_failed_items_back_to_pending(
     assert requeued == 1
     assert (queue._dirs["pending"] / f"{item.id}.json").exists()
     assert not (queue._dirs["failed"] / f"{item.id}.json").exists()
-    assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
-        ItemStatus.PENDING.value
-    )
+    assert item.content_hash is not None
+    assert await dedup_status(state_dir / "dedup.db", item.content_hash) == ItemStatus.PENDING.value
 
 
 async def test_requeue_failed_leaves_old_failed_items_alone(
@@ -94,8 +94,9 @@ async def test_requeue_failed_leaves_old_failed_items_alone(
     )
     atomic_write_json(item, queue._dirs)
     atomic_move(item.id, queue._dirs["pending"], queue._dirs["failed"])
-    await queue._dedup.record_new(sample_sms.content_hash(), item.id)
-    await queue._dedup.update_status(sample_sms.content_hash(), ItemStatus.FAILED)
+    item_hash = content_hash(queue, sample_sms)
+    await queue._dedup.record_new(item_hash, item.id)
+    await queue._dedup.update_status(item_hash, ItemStatus.FAILED)
 
     requeued = await queue.requeue_failed(max_age_days=30)
 
@@ -161,15 +162,17 @@ async def test_cleanup_sent_removes_old_files_and_purges_dedup_rows(
     old_path = queue._dirs["sent"] / f"{old_item.id}.json"
     recent_path = queue._dirs["sent"] / f"{recent_item.id}.json"
     os.utime(old_path, (old_timestamp(), old_timestamp()))
-    await set_last_status_at(state_dir / "dedup.db", old_sms.content_hash(), old_timestamp())
+    assert old_item.content_hash is not None
+    assert recent_item.content_hash is not None
+    await set_last_status_at(state_dir / "dedup.db", old_item.content_hash, old_timestamp())
 
     removed = await queue.cleanup_sent(max_age_days=30)
 
     assert removed == 1
     assert not old_path.exists()
     assert recent_path.exists()
-    assert await dedup_count(state_dir / "dedup.db", old_sms.content_hash()) == 0
-    assert await dedup_count(state_dir / "dedup.db", recent_sms.content_hash()) == 1
+    assert await dedup_count(state_dir / "dedup.db", old_item.content_hash) == 0
+    assert await dedup_count(state_dir / "dedup.db", recent_item.content_hash) == 1
 
 
 async def test_cleanup_sent_keeps_old_mtime_file_when_status_is_recent(
@@ -185,7 +188,8 @@ async def test_cleanup_sent_keeps_old_mtime_file_when_status_is_recent(
 
     assert removed == 0
     assert path.exists()
-    assert await dedup_count(state_dir / "dedup.db", sample_sms.content_hash()) == 1
+    assert item.content_hash is not None
+    assert await dedup_count(state_dir / "dedup.db", item.content_hash) == 1
 
 
 async def test_cleanup_sent_rejects_negative_max_age_without_deleting(
@@ -200,7 +204,8 @@ async def test_cleanup_sent_rejects_negative_max_age_without_deleting(
         await queue.cleanup_sent(max_age_days=-1)
 
     assert path.exists()
-    assert await dedup_count(state_dir / "dedup.db", sample_sms.content_hash()) == 1
+    assert item.content_hash is not None
+    assert await dedup_count(state_dir / "dedup.db", item.content_hash) == 1
 
 
 async def test_cleanup_failed_removes_old_files_and_purges_dedup_rows(
@@ -215,15 +220,17 @@ async def test_cleanup_failed_removes_old_files_and_purges_dedup_rows(
     old_path = queue._dirs["failed"] / f"{old_item.id}.json"
     recent_path = queue._dirs["failed"] / f"{recent_item.id}.json"
     os.utime(old_path, (old_timestamp(), old_timestamp()))
-    await set_last_status_at(state_dir / "dedup.db", old_sms.content_hash(), old_timestamp())
+    assert old_item.content_hash is not None
+    assert recent_item.content_hash is not None
+    await set_last_status_at(state_dir / "dedup.db", old_item.content_hash, old_timestamp())
 
     removed = await queue.cleanup_failed(max_age_days=30)
 
     assert removed == 1
     assert not old_path.exists()
     assert recent_path.exists()
-    assert await dedup_count(state_dir / "dedup.db", old_sms.content_hash()) == 0
-    assert await dedup_count(state_dir / "dedup.db", recent_sms.content_hash()) == 1
+    assert await dedup_count(state_dir / "dedup.db", old_item.content_hash) == 0
+    assert await dedup_count(state_dir / "dedup.db", recent_item.content_hash) == 1
 
 
 async def test_cleanup_failed_rejects_negative_max_age_without_deleting(
@@ -238,7 +245,8 @@ async def test_cleanup_failed_rejects_negative_max_age_without_deleting(
         await queue.cleanup_failed(max_age_days=-1)
 
     assert path.exists()
-    assert await dedup_count(state_dir / "dedup.db", sample_sms.content_hash()) == 1
+    assert item.content_hash is not None
+    assert await dedup_count(state_dir / "dedup.db", item.content_hash) == 1
 
 
 async def test_cleanup_failed_removes_old_unknown_corrupt_files(queue: Queue) -> None:

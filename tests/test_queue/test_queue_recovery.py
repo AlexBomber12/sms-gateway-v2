@@ -10,12 +10,12 @@ from sms_gateway_v2.queue import ItemStatus, Queue, QueueItem
 from sms_gateway_v2.queue.paths import atomic_move
 
 
-async def claim_enqueued(queue: Queue, sms: IncomingSms) -> str:
+async def claim_enqueued(queue: Queue, sms: IncomingSms) -> QueueItem:
     item = await queue.enqueue(sms)
     assert item is not None
     claimed = await queue.claim_next()
     assert claimed == item
-    return item.id
+    return item
 
 
 async def dedup_status(db_path: Path, content_hash: str) -> str:
@@ -37,15 +37,15 @@ async def test_recover_processing_moves_all_items_back_to_pending(
     queue: Queue,
     sample_sms: IncomingSms,
 ) -> None:
-    first_id = await claim_enqueued(queue, sample_sms)
-    second_id = await claim_enqueued(queue, sample_sms.model_copy(update={"text": "second"}))
+    first = await claim_enqueued(queue, sample_sms)
+    second = await claim_enqueued(queue, sample_sms.model_copy(update={"text": "second"}))
 
     recovered = await queue.recover_processing()
 
     assert recovered == 2
     assert sorted(path.name for path in queue._dirs["pending"].glob("*.json")) == [
-        f"{first_id}.json",
-        f"{second_id}.json",
+        f"{first.id}.json",
+        f"{second.id}.json",
     ]
     assert list(queue._dirs["processing"].glob("*.json")) == []
 
@@ -56,9 +56,10 @@ async def test_initialize_reconciles_terminal_file_with_processing_dedup_status(
 ) -> None:
     queue = Queue(state_dir, dedup_window_minutes=1)
     await queue.initialize()
-    item_id = await claim_enqueued(queue, sample_sms)
-    atomic_move(item_id, queue._dirs["processing"], queue._dirs["sent"])
-    assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
+    item = await claim_enqueued(queue, sample_sms)
+    assert item.content_hash is not None
+    atomic_move(item.id, queue._dirs["processing"], queue._dirs["sent"])
+    assert await dedup_status(state_dir / "dedup.db", item.content_hash) == (
         ItemStatus.PROCESSING.value
     )
     await queue.close()
@@ -66,7 +67,7 @@ async def test_initialize_reconciles_terminal_file_with_processing_dedup_status(
     reopened = Queue(state_dir, dedup_window_minutes=1)
     await reopened.initialize()
     try:
-        assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
+        assert await dedup_status(state_dir / "dedup.db", item.content_hash) == (
             ItemStatus.SENT.value
         )
     finally:
@@ -79,9 +80,10 @@ async def test_initialize_reconciles_failed_file_with_processing_dedup_status(
 ) -> None:
     queue = Queue(state_dir, dedup_window_minutes=1)
     await queue.initialize()
-    item_id = await claim_enqueued(queue, sample_sms)
-    atomic_move(item_id, queue._dirs["processing"], queue._dirs["failed"])
-    assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
+    item = await claim_enqueued(queue, sample_sms)
+    assert item.content_hash is not None
+    atomic_move(item.id, queue._dirs["processing"], queue._dirs["failed"])
+    assert await dedup_status(state_dir / "dedup.db", item.content_hash) == (
         ItemStatus.PROCESSING.value
     )
     await queue.close()
@@ -89,7 +91,7 @@ async def test_initialize_reconciles_failed_file_with_processing_dedup_status(
     reopened = Queue(state_dir, dedup_window_minutes=1)
     await reopened.initialize()
     try:
-        assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
+        assert await dedup_status(state_dir / "dedup.db", item.content_hash) == (
             ItemStatus.FAILED.value
         )
     finally:
@@ -108,7 +110,8 @@ async def test_initialize_reconciles_pending_file_with_failed_dedup_status(
     assert claimed == item
     await queue.mark_failed(item)
     atomic_move(item.id, queue._dirs["failed"], queue._dirs["pending"])
-    assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
+    assert item.content_hash is not None
+    assert await dedup_status(state_dir / "dedup.db", item.content_hash) == (
         ItemStatus.FAILED.value
     )
     await queue.close()
@@ -116,7 +119,7 @@ async def test_initialize_reconciles_pending_file_with_failed_dedup_status(
     reopened = Queue(state_dir, dedup_window_minutes=1)
     await reopened.initialize()
     try:
-        assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
+        assert await dedup_status(state_dir / "dedup.db", item.content_hash) == (
             ItemStatus.PENDING.value
         )
     finally:

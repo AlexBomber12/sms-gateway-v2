@@ -8,7 +8,7 @@ survival during long periods of inactivity.
 
 ## Status
 
-Sprint 1 of N: skeleton only, no application logic yet.
+Sprint 4 of 8: Telegram client and Prometheus metrics.
 
 ## Hardware Target
 
@@ -61,7 +61,11 @@ pytest
 |       |-- __init__.py
 |       |-- __main__.py
 |       |-- app.py
-|       `-- config.py
+|       |-- config.py
+|       |-- metrics/
+|       |-- modem/
+|       |-- queue/
+|       `-- telegram/
 `-- tests/
     |-- __init__.py
     |-- e2e/
@@ -71,15 +75,20 @@ pytest
     |   |-- __init__.py
     |   `-- test_placeholder.py
     |-- test_config.py
-    `-- test_smoke.py
+    |-- test_metrics/
+    |-- test_modem/
+    |-- test_queue/
+    |-- test_smoke.py
+    `-- test_telegram/
 ```
 
 ## Roadmap
 
 1. [x] Skeleton and CI.
-2. [ ] ModemManager D-Bus client with mocked tests.
-3. [ ] Durable file queue and SQLite deduplication.
-4. [ ] Telegram delivery with exponential backoff and Prometheus metrics.
-5. [ ] Dockerfile and deploy compose.
-6. [ ] Active modem healthcheck and dead-man heartbeat.
-7. [ ] Production cutover from AI-Server.
+2. [x] ModemManager D-Bus client with mocked tests.
+3. [x] Durable file queue and SQLite deduplication.
+4. [ ] Telegram client and Prometheus metrics.
+5. [ ] Delivery worker wiring modem queue and telegram with exponential backoff.
+6. [ ] Dockerfile and deploy compose.
+7. [ ] Active modem healthcheck and dead-man heartbeat.
+8. [ ] Production cutover from AI-Server.
