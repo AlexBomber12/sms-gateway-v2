@@ -122,6 +122,32 @@ async def test_requeue_failed_skips_corrupt_files_and_requeues_later_valid_items
     assert not (queue._dirs["failed"] / f"{valid_item.id}.json").exists()
 
 
+async def test_requeue_failed_skips_id_mismatch_and_requeues_later_valid_items(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    mismatched_file_id = "1714149692000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    payload_item_id = "1714149692001-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    mismatched_item = QueueItem(
+        id=payload_item_id,
+        sms=sample_sms.model_copy(update={"text": "mismatched failed"}),
+        first_seen_at=datetime.now(UTC),
+    )
+    mismatched_path = queue._dirs["failed"] / f"{mismatched_file_id}.json"
+    mismatched_path.write_text(mismatched_item.to_json(), encoding="utf-8")
+    valid_item = await enqueue_claim_and_mark_failed(
+        queue,
+        sample_sms.model_copy(update={"text": "valid after mismatch"}),
+    )
+
+    requeued = await queue.requeue_failed(max_age_days=30)
+
+    assert requeued == 1
+    assert mismatched_path.exists()
+    assert (queue._dirs["pending"] / f"{valid_item.id}.json").exists()
+    assert not (queue._dirs["failed"] / f"{valid_item.id}.json").exists()
+
+
 async def test_cleanup_sent_removes_old_files_and_purges_dedup_rows(
     queue: Queue,
     sample_sms: IncomingSms,

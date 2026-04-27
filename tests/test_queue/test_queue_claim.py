@@ -95,6 +95,29 @@ async def test_claim_next_on_corrupt_enqueued_file_removes_dedup_row(
     assert await queue.enqueue(sample_sms) is not None
 
 
+async def test_claim_next_on_id_mismatch_moves_file_to_failed_and_tries_next(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    mismatched_file_id = "1714149692000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    payload_item_id = "1714149692001-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    mismatched_item = make_item(sample_sms, payload_item_id, text="mismatched")
+    mismatched_path = queue._dirs["pending"] / f"{mismatched_file_id}.json"
+    mismatched_path.write_text(mismatched_item.to_json(), encoding="utf-8")
+    await queue._dedup.record_new(mismatched_item.sms.content_hash(), mismatched_file_id)
+    valid = make_item(sample_sms, "1714149693000-0123456789abcdef0123456789abcdef")
+    atomic_write_json(valid, queue._dirs)
+    await queue._dedup.record_new(valid.sms.content_hash(), valid.id)
+
+    claimed = await queue.claim_next()
+
+    assert claimed == valid
+    assert not mismatched_path.exists()
+    assert (queue._dirs["failed"] / mismatched_path.name).exists()
+    assert (queue._dirs["processing"] / f"{valid.id}.json").exists()
+    assert await queue._dedup.is_duplicate(mismatched_item.sms.content_hash()) is False
+
+
 async def test_claim_next_updates_dedup_status_to_processing(
     queue: Queue,
     sample_sms: IncomingSms,

@@ -124,9 +124,35 @@ class Queue:
                     )
                     continue
 
+                if item.id != path.stem:
+                    item_id = path.stem
+                    logger.warning(
+                        "queue_item_corrupted",
+                        item_id=item_id,
+                        payload_item_id=item.id,
+                        path=str(path),
+                        error="queue item id does not match filename",
+                        elapsed_ms=_elapsed_ms(started_at),
+                    )
+                    await asyncio.to_thread(
+                        atomic_move,
+                        item_id,
+                        self._dirs["pending"],
+                        self._dirs["failed"],
+                    )
+                    dedup_rows_removed = await self._dedup.delete_by_item_id(item_id)
+                    logger.info(
+                        "queue_corrupted_item_dedup_removed",
+                        item_id=item_id,
+                        dedup_rows_removed=dedup_rows_removed,
+                        elapsed_ms=_elapsed_ms(started_at),
+                    )
+                    continue
+
+                item_id = path.stem
                 await asyncio.to_thread(
                     atomic_move,
-                    item.id,
+                    item_id,
                     self._dirs["pending"],
                     self._dirs["processing"],
                 )
@@ -138,12 +164,12 @@ class Queue:
                     await self._dedup.update_status(content_hash, ItemStatus.PROCESSING)
                     logger.info(
                         "queue_item_dedup_repaired",
-                        item_id=item.id,
+                        item_id=item_id,
                         elapsed_ms=_elapsed_ms(started_at),
                     )
                 logger.info(
                     "queue_item_claimed",
-                    item_id=item.id,
+                    item_id=item_id,
                     elapsed_ms=_elapsed_ms(started_at),
                 )
                 return item
@@ -236,10 +262,20 @@ class Queue:
                         elapsed_ms=_elapsed_ms(started_at),
                     )
                     continue
+                if item.id != path.stem:
+                    logger.warning(
+                        "queue_failed_item_corrupted",
+                        item_id=path.stem,
+                        payload_item_id=item.id,
+                        path=str(path),
+                        error="queue item id does not match filename",
+                        elapsed_ms=_elapsed_ms(started_at),
+                    )
+                    continue
                 if item.first_seen_at >= cutoff:
                     await asyncio.to_thread(
                         atomic_move,
-                        item.id,
+                        path.stem,
                         self._dirs["failed"],
                         self._dirs["pending"],
                     )
