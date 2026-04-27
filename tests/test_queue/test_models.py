@@ -16,6 +16,7 @@ def test_queue_item_new_generates_timestamp_uuid_id(sample_sms: IncomingSms) -> 
     assert re.fullmatch(r"\d{13}-[0-9a-f]{32}", item.id)
     assert item.sms == sample_sms
     assert item.first_seen_at.tzinfo == UTC
+    assert item.content_hash is None
     assert item.attempts == 0
     assert item.last_attempt_at is None
     assert item.next_retry_at is None
@@ -26,6 +27,7 @@ def test_queue_item_json_round_trips(sample_sms: IncomingSms) -> None:
         id="1714149693000-0123456789abcdef0123456789abcdef",
         sms=sample_sms,
         first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+        content_hash="abc123",
     )
 
     restored = QueueItem.from_json(item.to_json())

@@ -24,6 +24,7 @@ class QueueItem(BaseModel):
     id: str
     sms: IncomingSms
     first_seen_at: datetime
+    content_hash: str | None = None
     attempts: int = 0
     last_attempt_at: datetime | None = None
     next_retry_at: datetime | None = None

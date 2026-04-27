@@ -29,6 +29,14 @@ async def dedup_status(db_path: Path, content_hash: str) -> str:
     return str(row[0])
 
 
+async def dedup_row_count(db_path: Path) -> int:
+    async with aiosqlite.connect(db_path) as connection:
+        cursor = await connection.execute("SELECT COUNT(*) FROM seen_messages")
+        row = await cursor.fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 async def test_claim_next_returns_none_on_empty_queue(queue: Queue) -> None:
     assert await queue.claim_next() is None
 
@@ -101,6 +109,33 @@ async def test_claim_next_updates_dedup_status_to_processing(
     assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
         ItemStatus.PROCESSING.value
     )
+
+
+async def test_claim_and_mark_use_persisted_content_hash_after_window_change(
+    state_dir: Path,
+    sample_sms: IncomingSms,
+) -> None:
+    original_queue = Queue(state_dir, dedup_window_minutes=5)
+    await original_queue.initialize()
+    item = await original_queue.enqueue(sample_sms)
+    assert item is not None
+    assert item.content_hash is not None
+    await original_queue.close()
+
+    reopened_queue = Queue(state_dir, dedup_window_minutes=1)
+    await reopened_queue.initialize()
+    try:
+        claimed = await reopened_queue.claim_next()
+        assert claimed is not None
+        assert claimed.content_hash == item.content_hash
+        await reopened_queue.mark_sent(claimed)
+
+        assert await dedup_row_count(state_dir / "dedup.db") == 1
+        assert await dedup_status(state_dir / "dedup.db", item.content_hash) == (
+            ItemStatus.SENT.value
+        )
+    finally:
+        await reopened_queue.close()
 
 
 async def test_claim_next_repairs_missing_dedup_row_for_pending_item(

@@ -49,7 +49,7 @@ class Queue:
 
     async def enqueue(self, sms: IncomingSms) -> QueueItem | None:
         started_at = time.monotonic()
-        item = QueueItem.new(sms)
+        item = self._with_content_hash(QueueItem.new(sms))
         content_hash = self._content_hash_for_item(item)
         async with self._lock:
             if await self._dedup.is_duplicate(content_hash):
@@ -302,8 +302,15 @@ class Queue:
             return count
 
     def _content_hash_for_item(self, item: QueueItem) -> str:
+        if item.content_hash is not None:
+            return item.content_hash
         fallback_timestamp = item.first_seen_at
         return self._content_hash(item.sms, fallback_timestamp=fallback_timestamp)
+
+    def _with_content_hash(self, item: QueueItem) -> QueueItem:
+        if item.content_hash is not None:
+            return item
+        return item.model_copy(update={"content_hash": self._content_hash_for_item(item)})
 
     def _content_hash(self, sms: IncomingSms, *, fallback_timestamp: datetime) -> str:
         timestamp = sms.timestamp or fallback_timestamp

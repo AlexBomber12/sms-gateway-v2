@@ -58,6 +58,20 @@ async def test_enqueue_new_sms_returns_item_and_creates_pending_file(
     assert (queue._dirs["pending"] / f"{item.id}.json").exists()
 
 
+async def test_with_content_hash_preserves_existing_hash(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    item = QueueItem(
+        id="1714149693000-0123456789abcdef0123456789abcdef",
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+        content_hash="persisted-hash",
+    )
+
+    assert queue._with_content_hash(item) == item
+
+
 async def test_enqueue_duplicate_sms_returns_none_and_does_not_create_second_file(
     queue: Queue,
     sample_sms: IncomingSms,
