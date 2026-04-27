@@ -110,7 +110,9 @@ class DeliveryWorker:
                 await self._queue.mark_failed(item)
                 return True
 
-            delay_seconds = self._retry_schedule_seconds[item.attempts]
+            delay_seconds = float(self._retry_schedule_seconds[item.attempts])
+            if isinstance(exc, TelegramRateLimited):
+                delay_seconds = max(delay_seconds, exc.retry_after)
             next_retry_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
             updated = await self._queue.update_attempt(item, next_retry_at=next_retry_at)
             await self._move_processing_to_pending(updated)

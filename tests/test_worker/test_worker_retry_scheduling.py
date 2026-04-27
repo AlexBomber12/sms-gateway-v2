@@ -45,7 +45,7 @@ async def test_transport_error_schedules_retry(
     )
 
 
-async def test_rate_limit_schedules_retry(
+async def test_rate_limit_schedules_retry_after_telegram_cooldown(
     queue: Queue,
     telegram_client: MagicMock,
     metrics: MetricsRegistry,
@@ -55,12 +55,15 @@ async def test_rate_limit_schedules_retry(
     item = await queue.enqueue(sample_sms)
     assert item is not None
     telegram_client.send_message.side_effect = TelegramRateLimited("too many", retry_after=2.0)
+    before = datetime.now(UTC) + timedelta(seconds=2)
 
     assert await worker._process_one_pending_item() is True
 
+    after = datetime.now(UTC) + timedelta(seconds=2)
     pending_item = load_item(queue._dirs["pending"] / f"{item.id}.json")
     assert pending_item.attempts == 1
     assert pending_item.next_retry_at is not None
+    assert before <= pending_item.next_retry_at <= after
     assert metric_value(metrics, "sms_failed_total") == 0.0
     assert metric_value(metrics, "telegram_send_failures_total", {"reason": "rate_limited"}) == 1.0
 
