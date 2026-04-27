@@ -80,13 +80,12 @@ class TelegramClient:
                 duration_ms=0,
             )
             try:
+                payload = {"chat_id": self.chat_id, "text": message.text}
+                if message.parse_mode is not None:
+                    payload["parse_mode"] = message.parse_mode
                 response = await client.post(
                     "sendMessage",
-                    json={
-                        "chat_id": self.chat_id,
-                        "text": message.text,
-                        "parse_mode": message.parse_mode,
-                    },
+                    json=payload,
                 )
                 self._handle_response(
                     response, attempt=attempt, duration_ms=_elapsed_ms(started_at)

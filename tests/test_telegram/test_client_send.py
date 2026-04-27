@@ -78,6 +78,21 @@ async def test_send_message_uses_configured_chat_id(
     )
 
 
+async def test_send_message_omits_parse_mode_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post = AsyncMock(side_effect=[ok_response()])
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+
+    async with TelegramClient("token", "-100") as client:
+        await client.send_message(TelegramMessage(chat_id="-100", text="hello", parse_mode=None))
+
+    post.assert_awaited_once_with(
+        "sendMessage",
+        json={"chat_id": "-100", "text": "hello"},
+    )
+
+
 async def test_send_message_raises_telegram_error_on_not_ok_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
