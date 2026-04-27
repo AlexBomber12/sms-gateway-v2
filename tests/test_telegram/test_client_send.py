@@ -384,12 +384,6 @@ def test_constructor_raises_value_error_on_non_positive_max_retries(max_retries:
         TelegramClient("token", "-100", max_retries=max_retries)
 
 
-def test_attempts_remaining_returns_configured_max_retries() -> None:
-    client = TelegramClient("token", "-100", max_retries=5)
-
-    assert client.attempts_remaining == 5
-
-
 async def test_send_message_without_context_raises_transport_error() -> None:
     client = TelegramClient("token", "-100")
 

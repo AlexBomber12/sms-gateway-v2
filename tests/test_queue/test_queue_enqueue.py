@@ -107,6 +107,16 @@ async def test_enqueue_new_sms_returns_item_and_creates_pending_file(
     assert (queue._dirs["pending"] / f"{item.id}.json").exists()
 
 
+def test_content_hash_for_sms_uses_default_fallback(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    assert queue.content_hash_for_sms(sample_sms) == queue.content_hash_for_sms(
+        sample_sms,
+        fallback_timestamp=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+    )
+
+
 async def test_with_content_hash_preserves_existing_hash(
     queue: Queue,
     sample_sms: IncomingSms,

@@ -372,6 +372,16 @@ class Queue:
         fallback_timestamp = item.first_seen_at
         return self._content_hash(item.sms, fallback_timestamp=fallback_timestamp)
 
+    def content_hash_for_sms(
+        self,
+        sms: IncomingSms,
+        *,
+        fallback_timestamp: datetime | None = None,
+    ) -> str:
+        if fallback_timestamp is None:
+            fallback_timestamp = datetime.now(UTC)
+        return self._content_hash(sms, fallback_timestamp=fallback_timestamp)
+
     def _current_content_hash_for_item(self, item: QueueItem) -> str:
         return self._content_hash(item.sms, fallback_timestamp=item.first_seen_at)
 
