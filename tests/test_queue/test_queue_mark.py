@@ -41,9 +41,8 @@ async def test_mark_sent_moves_item_from_processing_to_sent_and_updates_dedup(
 
     assert not (queue._dirs["processing"] / f"{item.id}.json").exists()
     assert (queue._dirs["sent"] / f"{item.id}.json").exists()
-    assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
-        ItemStatus.SENT.value
-    )
+    assert item.content_hash is not None
+    assert await dedup_status(state_dir / "dedup.db", item.content_hash) == ItemStatus.SENT.value
 
 
 async def test_mark_failed_moves_item_to_failed_and_updates_dedup(
@@ -57,9 +56,8 @@ async def test_mark_failed_moves_item_to_failed_and_updates_dedup(
 
     assert not (queue._dirs["processing"] / f"{item.id}.json").exists()
     assert (queue._dirs["failed"] / f"{item.id}.json").exists()
-    assert await dedup_status(state_dir / "dedup.db", sample_sms.content_hash()) == (
-        ItemStatus.FAILED.value
-    )
+    assert item.content_hash is not None
+    assert await dedup_status(state_dir / "dedup.db", item.content_hash) == ItemStatus.FAILED.value
 
 
 async def test_mark_sent_raises_item_not_found_when_processing_file_is_missing(

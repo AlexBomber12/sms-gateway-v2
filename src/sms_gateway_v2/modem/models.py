@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -80,11 +79,3 @@ class IncomingSms(BaseModel):
     text: str
     timestamp: datetime | None
     pdu_type: str
-
-    def content_hash(self) -> str:
-        if self.timestamp is None:
-            minute_iso = ""
-        else:
-            minute_iso = self.timestamp.replace(second=0, microsecond=0).isoformat()
-        payload = f"{self.number}|{self.text}|{minute_iso}"
-        return hashlib.sha256(payload.encode()).hexdigest()
