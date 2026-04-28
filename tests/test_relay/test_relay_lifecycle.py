@@ -164,6 +164,66 @@ async def test_start_rolls_back_on_cancellation_after_queue_initialize(
     queue.close.assert_awaited_once()
 
 
+async def test_stop_waits_for_in_flight_start_and_leaves_relay_stopped(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    wait_until: Callable[[Callable[[], bool]], Awaitable[None]],
+) -> None:
+    continue_start = asyncio.Event()
+
+    async def block_watch_added(callback: Callable[[str], Awaitable[None]]) -> None:
+        await continue_start.wait()
+
+    modem_client.watch_added = AsyncMock(side_effect=block_watch_added)
+
+    start_task = asyncio.create_task(relay.start())
+    await wait_until(lambda: relay.state().status == "starting")
+
+    stop_task = asyncio.create_task(relay.stop())
+    await asyncio.sleep(0)
+
+    assert not stop_task.done()
+
+    continue_start.set()
+    await start_task
+    await stop_task
+
+    assert relay.state().status == "stopped"
+    modem_client.disconnect.assert_awaited_once()
+
+
+async def test_stop_cancellation_preserves_disconnect_and_queue_close(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+) -> None:
+    disconnect_started = asyncio.Event()
+    allow_disconnect = asyncio.Event()
+
+    async def block_disconnect() -> None:
+        disconnect_started.set()
+        await allow_disconnect.wait()
+
+    await relay.start()
+    modem_client.disconnect = AsyncMock(side_effect=block_disconnect)
+    queue.close = AsyncMock(wraps=queue.close)
+
+    stop_task = asyncio.create_task(relay.stop())
+    await disconnect_started.wait()
+    stop_task.cancel()
+    await asyncio.sleep(0)
+
+    assert not stop_task.done()
+
+    allow_disconnect.set()
+    with pytest.raises(asyncio.CancelledError):
+        await stop_task
+
+    assert relay.state().status == "stopped"
+    modem_client.disconnect.assert_awaited_once()
+    queue.close.assert_awaited_once()
+
+
 async def test_start_calls_recover_processing_and_logs_count(
     relay: SmsRelay,
     queue: Queue,

@@ -42,9 +42,22 @@ class SmsRelay:
         self._last_sms_received_at: datetime | None = None
         self._last_error: str | None = None
         self._worker_task: asyncio.Task[None] | None = None
+        self._lifecycle_lock: asyncio.Lock = asyncio.Lock()
         self._sms_handler_lock: asyncio.Lock = asyncio.Lock()
 
     async def start(self) -> None:
+        async with self._lifecycle_lock:
+            await self._start_locked()
+
+    async def stop(self) -> None:
+        stop_task = asyncio.create_task(self._stop_locked())
+        try:
+            await asyncio.shield(stop_task)
+        except asyncio.CancelledError:
+            await stop_task
+            raise
+
+    async def _start_locked(self) -> None:
         if self._status != "stopped":
             raise RelayError("relay is already started or in transition")
 
@@ -85,7 +98,11 @@ class SmsRelay:
             recovered=recovered,
         )
 
-    async def stop(self) -> None:
+    async def _stop_locked(self) -> None:
+        async with self._lifecycle_lock:
+            await self._stop_started_relay()
+
+    async def _stop_started_relay(self) -> None:
         if self._status in {"stopped", "stopping"}:
             return
 
