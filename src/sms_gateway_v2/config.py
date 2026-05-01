@@ -31,6 +31,7 @@ class Settings(BaseSettings):
         default=(5, 30, 300, 1800, 7200, 21600, 86400)
     )
     metrics_path: str = "/metrics"
+    relay_enabled: bool = False
 
     @field_validator("worker_retry_schedule_seconds", mode="before")
     @classmethod

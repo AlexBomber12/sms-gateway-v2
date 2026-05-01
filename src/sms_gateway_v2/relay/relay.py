@@ -45,6 +45,10 @@ class SmsRelay:
         self._lifecycle_lock: asyncio.Lock = asyncio.Lock()
         self._sms_handler_lock: asyncio.Lock = asyncio.Lock()
 
+    @property
+    def telegram_client(self) -> TelegramClient:
+        return self._telegram_client
+
     async def start(self) -> None:
         async with self._lifecycle_lock:
             await self._start_locked()

@@ -6,13 +6,22 @@ import pytest
 from pydantic import ValidationError
 
 import sms_gateway_v2.relay as relay_api
-from sms_gateway_v2.relay import RelayState, SmsRelay
+from sms_gateway_v2.relay import RelayError, RelayNotRunning, RelayState, SmsRelay, build_relay
 
 
 def test_relay_public_api_exports_state_and_relay_only() -> None:
-    assert relay_api.__all__ == ["RelayState", "SmsRelay"]
+    assert relay_api.__all__ == [
+        "RelayError",
+        "RelayNotRunning",
+        "RelayState",
+        "SmsRelay",
+        "build_relay",
+    ]
+    assert relay_api.RelayError is RelayError
+    assert relay_api.RelayNotRunning is RelayNotRunning
     assert relay_api.RelayState is RelayState
     assert relay_api.SmsRelay is SmsRelay
+    assert relay_api.build_relay is build_relay
 
 
 def test_relay_state_construction() -> None:
