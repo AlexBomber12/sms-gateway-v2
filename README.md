@@ -8,7 +8,7 @@ survival during long periods of inactivity.
 
 ## Status
 
-Sprint 5c of 8: FastAPI lifespan integration.
+Sprint 6 of 8: Docker deployment artifacts.
 
 ## Hardware Target
 
@@ -37,6 +37,15 @@ ruff check .
 ruff format .
 mypy src
 pytest
+```
+
+## Quick deploy
+
+For production deployment on the NAS host with Docker Compose, see
+[`docs/deploy.md`](docs/deploy.md). The short version:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
 ## Project Layout

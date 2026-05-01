@@ -1,2 +1,36 @@
-# TODO: filled in sprint 5
+# Production deployment for sms-gateway-v2 on the NAS host (192.168.50.2).
+#
+# Prerequisites on the host:
+#   - ModemManager is installed and active on the system bus.
+#   - A polkit rule grants the sms-gateway group access to
+#     org.freedesktop.ModemManager1, and the host user that owns uid 1000
+#     is a member of that group. See docs/deploy.md for the exact rule
+#     and the alternative of running the container as root.
+#   - A .env file lives next to this compose file with at least:
+#       HOST=0.0.0.0
+#       RELAY_ENABLED=true
+#       TELEGRAM_BOT_TOKEN=...
+#       TELEGRAM_CHAT_ID=...
+#     The repo-root .env.example defaults HOST=127.0.0.1 for local dev; in this
+#     env_file it would override the image's HOST=0.0.0.0 and bind Uvicorn to
+#     the container's loopback, so set HOST=0.0.0.0 (or omit the line) here.
+#     See .env.example at the repo root for the full set of supported variables.
+#
+# The published port is bound to 127.0.0.1 only; this service trusts the LAN
+# perimeter and is not meant to be reachable from outside the host.
+
 services:
+  sms-gateway-v2:
+    image: ghcr.io/alexbomber12/sms-gateway-v2:latest
+    container_name: sms-gateway-v2
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8091:8091"
+    volumes:
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro
+      - sms-gateway-state:/app/state
+
+volumes:
+  sms-gateway-state:
