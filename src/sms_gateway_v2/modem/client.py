@@ -120,6 +120,8 @@ class ModemInterface(Protocol):
 
     async def get_sim(self) -> str: ...
 
+    async def call_reset(self) -> None: ...
+
 
 class Modem3gppInterface(Protocol):
     async def get_registration_state(self) -> int: ...
@@ -358,6 +360,32 @@ class ModemManagerClient:
             registration=registration.value,
         )
         return registration
+
+    async def reset(self) -> None:
+        started_at = time.monotonic()
+        modem_path = await self._ensure_modem_path()
+        modem_path, proxy = await self._get_proxy_object(
+            "modem object",
+            modem_path,
+            refresh_cached_modem=True,
+        )
+        modem = cast(
+            ModemInterface,
+            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_INTERFACE),
+        )
+        try:
+            await modem.call_reset()
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable(f"failed to reset modem at {modem_path}") from exc
+
+        logger.info(
+            "modem_reset_called",
+            duration_seconds=time.monotonic() - started_at,
+            modem_path=modem_path,
+        )
+        self._modem_path = None
+        self._added_watch_keys.clear()
+        self._added_watch_resubscribe_required = bool(self._added_callbacks)
 
     async def list_messages(self) -> list[IncomingSms]:
         modem_path = await self._ensure_modem_path()

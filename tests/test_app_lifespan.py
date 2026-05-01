@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from sms_gateway_v2 import app as app_module
 from sms_gateway_v2.metrics import QueueGaugeUpdater
-from sms_gateway_v2.relay import RelayError, SmsRelay
+from sms_gateway_v2.relay import ModemWatchdog, RelayError, SmsRelay
 from sms_gateway_v2.telegram import TelegramClient
 
 
@@ -27,6 +27,13 @@ def _make_gauge_updater() -> MagicMock:
     gauge_updater.run = AsyncMock()
     gauge_updater.stop = MagicMock()
     return gauge_updater
+
+
+def _make_watchdog() -> MagicMock:
+    watchdog = MagicMock(spec=ModemWatchdog)
+    watchdog.run = AsyncMock()
+    watchdog.stop = MagicMock()
+    return watchdog
 
 
 def test_relay_disabled_skips_lifespan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -56,12 +63,15 @@ def test_relay_enabled_calls_start_and_stop(
     relay.stop = AsyncMock()
 
     gauge_updater = _make_gauge_updater()
+    watchdog = _make_watchdog()
 
     call_order: list[str] = []
+    relay.start.side_effect = lambda: call_order.append("relay_start")
     gauge_updater.stop.side_effect = lambda: call_order.append("gauge_stop")
+    watchdog.stop.side_effect = lambda: call_order.append("watchdog_stop")
     relay.stop.side_effect = lambda: call_order.append("relay_stop")
 
-    fake_build_relay = MagicMock(return_value=(relay, gauge_updater))
+    fake_build_relay = MagicMock(return_value=(relay, gauge_updater, watchdog))
     monkeypatch.setattr(app_module, "build_relay", fake_build_relay)
 
     app = app_module.create_app()
@@ -75,7 +85,9 @@ def test_relay_enabled_calls_start_and_stop(
     relay.stop.assert_awaited_once()
     gauge_updater.run.assert_awaited_once()
     gauge_updater.stop.assert_called_once()
-    assert call_order == ["gauge_stop", "relay_stop"]
+    watchdog.run.assert_awaited_once()
+    watchdog.stop.assert_called_once()
+    assert call_order == ["relay_start", "gauge_stop", "watchdog_stop", "relay_stop"]
 
 
 def test_relay_enabled_missing_credentials_raises(
@@ -107,11 +119,12 @@ def test_relay_start_failure_releases_telegram_client(
     relay.stop = AsyncMock()
 
     gauge_updater = _make_gauge_updater()
+    watchdog = _make_watchdog()
 
     monkeypatch.setattr(
         app_module,
         "build_relay",
-        MagicMock(return_value=(relay, gauge_updater)),
+        MagicMock(return_value=(relay, gauge_updater, watchdog)),
     )
 
     app = app_module.create_app()
@@ -123,6 +136,8 @@ def test_relay_start_failure_releases_telegram_client(
     relay.stop.assert_not_awaited()
     gauge_updater.run.assert_not_awaited()
     gauge_updater.stop.assert_not_called()
+    watchdog.run.assert_not_awaited()
+    watchdog.stop.assert_not_called()
 
 
 def test_relay_shutdown_cancels_gauge_task_on_timeout(
@@ -149,10 +164,12 @@ def test_relay_shutdown_cancels_gauge_task_on_timeout(
     gauge_updater.run = AsyncMock(side_effect=never_stops)
     gauge_updater.stop = MagicMock()
 
+    watchdog = _make_watchdog()
+
     monkeypatch.setattr(
         app_module,
         "build_relay",
-        MagicMock(return_value=(relay, gauge_updater)),
+        MagicMock(return_value=(relay, gauge_updater, watchdog)),
     )
 
     app = app_module.create_app()
@@ -160,4 +177,44 @@ def test_relay_shutdown_cancels_gauge_task_on_timeout(
         pass
 
     gauge_updater.stop.assert_called_once()
+    watchdog.stop.assert_called_once()
+    relay.stop.assert_awaited_once()
+
+
+def test_relay_shutdown_cancels_watchdog_task_on_timeout(
+    monkeypatch: pytest.MonkeyPatch, relay_env: None
+) -> None:
+    import asyncio as _asyncio
+
+    monkeypatch.setenv("RELAY_ENABLED", "true")
+    monkeypatch.setattr(app_module, "WATCHDOG_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
+
+    telegram_client = MagicMock(spec=TelegramClient)
+    telegram_client.__aenter__ = AsyncMock(return_value=telegram_client)
+    telegram_client.__aexit__ = AsyncMock(return_value=None)
+
+    relay = MagicMock(spec=SmsRelay)
+    relay.telegram_client = telegram_client
+    relay.start = AsyncMock()
+    relay.stop = AsyncMock()
+
+    async def never_stops() -> None:
+        await _asyncio.Event().wait()
+
+    gauge_updater = _make_gauge_updater()
+    watchdog = MagicMock(spec=ModemWatchdog)
+    watchdog.run = AsyncMock(side_effect=never_stops)
+    watchdog.stop = MagicMock()
+
+    monkeypatch.setattr(
+        app_module,
+        "build_relay",
+        MagicMock(return_value=(relay, gauge_updater, watchdog)),
+    )
+
+    app = app_module.create_app()
+    with TestClient(app):
+        pass
+
+    watchdog.stop.assert_called_once()
     relay.stop.assert_awaited_once()

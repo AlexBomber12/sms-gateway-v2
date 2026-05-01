@@ -6,7 +6,7 @@ import pytest
 
 from sms_gateway_v2.config import Settings
 from sms_gateway_v2.metrics import MetricsRegistry, QueueGaugeUpdater
-from sms_gateway_v2.relay import RelayError, SmsRelay, build_relay
+from sms_gateway_v2.relay import ModemWatchdog, RelayError, SmsRelay, build_relay
 
 
 def _settings(
@@ -22,14 +22,15 @@ def _settings(
     )
 
 
-def test_build_relay_returns_relay_and_gauge_updater(tmp_path: Path) -> None:
+def test_build_relay_returns_relay_gauge_updater_and_watchdog(tmp_path: Path) -> None:
     settings = _settings(state_dir=tmp_path / "state")
     metrics = MetricsRegistry()
 
-    relay, gauge_updater = build_relay(settings, metrics)
+    relay, gauge_updater, watchdog = build_relay(settings, metrics)
 
     assert isinstance(relay, SmsRelay)
     assert isinstance(gauge_updater, QueueGaugeUpdater)
+    assert isinstance(watchdog, ModemWatchdog)
     assert relay.telegram_client.bot_token == settings.telegram_bot_token
     assert relay.telegram_client.chat_id == settings.telegram_chat_id
 
@@ -43,9 +44,27 @@ def test_build_relay_uses_configured_gauge_interval(tmp_path: Path) -> None:
     )
     metrics = MetricsRegistry()
 
-    _, gauge_updater = build_relay(settings, metrics)
+    _, gauge_updater, _ = build_relay(settings, metrics)
 
     assert gauge_updater._interval_seconds == 7.5
+
+
+def test_build_relay_uses_configured_watchdog_settings(tmp_path: Path) -> None:
+    settings = Settings(
+        state_dir=tmp_path / "state",
+        telegram_bot_token="test-token",
+        telegram_chat_id="-100200300",
+        modem_watchdog_interval_seconds=15.0,
+        modem_watchdog_signal_zero_threshold=2,
+        modem_watchdog_bad_state_minutes=4,
+    )
+    metrics = MetricsRegistry()
+
+    _, _, watchdog = build_relay(settings, metrics)
+
+    assert watchdog._interval_seconds == 15.0
+    assert watchdog._signal_zero_threshold == 2
+    assert watchdog._bad_state_minutes == 4
 
 
 def test_build_relay_raises_when_token_empty(tmp_path: Path) -> None:
