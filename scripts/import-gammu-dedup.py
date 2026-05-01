@@ -36,7 +36,7 @@ import sys
 import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 # DEDUP HASH FORMULA: keep this in sync with
@@ -78,7 +78,15 @@ def _parse_timestamp(raw: str) -> datetime:
         else:
             raise ValueError(f"unrecognised timestamp format: {raw!r}") from None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
+        # Gammu's default SQLite schema stores ReceivingDateTime as a naive
+        # local wall-clock value. Tagging it as UTC would shift its epoch by
+        # the local offset and produce a different bucket than the runtime
+        # Queue._content_hash computes once ModemManager redelivers the same
+        # SMS with a real timezone offset. datetime.astimezone() with no
+        # argument interprets a naive value as system local time and returns
+        # an aware datetime in that same zone — matching the modem's report
+        # when both run on the same host (or with the same TZ env).
+        parsed = parsed.astimezone()
     return parsed
 
 
