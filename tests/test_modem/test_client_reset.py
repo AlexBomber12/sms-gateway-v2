@@ -6,9 +6,11 @@ import pytest
 from dbus_fast import DBusError
 
 from sms_gateway_v2.modem import ModemManagerClient, ModemManagerUnavailable
+from tests.test_modem.factories import make_fake_messaging_proxy
 
 MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
+REDISCOVERED_MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/1"
 
 
 @pytest.fixture
@@ -105,3 +107,41 @@ async def test_reset_wraps_dbus_errors_as_modem_manager_unavailable(
         await client.reset()
 
     assert exc.value.__cause__ is error
+
+
+async def test_reset_resubscribes_added_watchers_on_next_operation(
+    fake_bus: MagicMock,
+    fake_reset_proxy: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    refreshed_messaging_proxy = make_fake_messaging_proxy()
+    object_manager = MagicMock()
+    object_manager.call_get_managed_objects = AsyncMock(
+        return_value={REDISCOVERED_MODEM_PATH: {MODEM_INTERFACE: object()}}
+    )
+    object_manager_proxy = MagicMock()
+    object_manager_proxy.get_interface.return_value = object_manager
+    fake_bus.get_proxy_object.side_effect = [
+        fake_reset_proxy,
+        object_manager_proxy,
+        refreshed_messaging_proxy,
+        fake_modem_proxy,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def callback(_sms_path: str) -> None:
+        return None
+
+    callback_key = client._callback_key(callback)
+    client._added_callbacks[callback_key] = callback
+    client._added_watch_keys.add((MODEM_PATH, callback_key))
+
+    await client.reset()
+    await client.get_signal_quality()
+
+    refreshed_messaging_proxy.messaging.on_added.assert_called_once()
+    assert client._modem_path == REDISCOVERED_MODEM_PATH
+    assert (REDISCOVERED_MODEM_PATH, callback_key) in client._added_watch_keys
+    assert client._added_watch_resubscribe_required is False

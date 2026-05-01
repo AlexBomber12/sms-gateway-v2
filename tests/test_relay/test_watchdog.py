@@ -186,3 +186,36 @@ async def test_first_bad_state_sets_since_marker_without_resetting(
 
     assert watchdog._bad_state_since is not None
     modem_client.reset.assert_not_awaited()
+
+
+async def test_reset_failure_does_not_terminate_watchdog_loop(
+    watchdog: ModemWatchdog,
+    modem_client: MagicMock,
+    metrics: MetricsRegistry,
+) -> None:
+    modem_client.get_signal_quality.return_value = _signal(0)
+    modem_client.get_registration_state.return_value = RegistrationState.ROAMING
+    modem_client.reset.side_effect = ModemError("reset boom")
+
+    for _ in range(3):
+        await watchdog._poll_once()
+
+    modem_client.reset.assert_awaited_once_with()
+    assert watchdog._consecutive_zero_signal_polls == 0
+    assert metrics.registry.get_sample_value("modem_resets_total") == 0.0
+
+
+async def test_reset_failure_allows_subsequent_reset_attempts(
+    watchdog: ModemWatchdog,
+    modem_client: MagicMock,
+    metrics: MetricsRegistry,
+) -> None:
+    modem_client.get_signal_quality.return_value = _signal(0)
+    modem_client.get_registration_state.return_value = RegistrationState.ROAMING
+    modem_client.reset.side_effect = [ModemError("transient"), None]
+
+    for _ in range(6):
+        await watchdog._poll_once()
+
+    assert modem_client.reset.await_count == 2
+    assert metrics.registry.get_sample_value("modem_resets_total") == 1.0

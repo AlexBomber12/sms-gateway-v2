@@ -562,6 +562,10 @@ class ModemManagerClient:
     async def _ensure_modem_path(self) -> str:
         if self._modem_path is None:
             await self.find_modem()
+            rediscovered_path = self._modem_path
+            assert rediscovered_path is not None
+            if self._added_watch_resubscribe_required:
+                await self._subscribe_missing_added_watchers(rediscovered_path)
         modem_path = self._modem_path
         assert modem_path is not None
         return modem_path

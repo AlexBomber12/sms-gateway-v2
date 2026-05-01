@@ -85,8 +85,12 @@ class ModemWatchdog:
                 consecutive_zero_signal_polls=self._consecutive_zero_signal_polls,
                 state=state.value,
             )
-            await self._modem_client.reset()
-            self._metrics.modem_resets_total.inc()
+            try:
+                await self._modem_client.reset()
+            except ModemError as exc:
+                logger.warning("watchdog_reset_failed", reason=reason, error=str(exc))
+            else:
+                self._metrics.modem_resets_total.inc()
             self._consecutive_zero_signal_polls = 0
             self._bad_state_since = None
 
