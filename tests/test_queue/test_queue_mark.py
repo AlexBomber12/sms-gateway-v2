@@ -60,6 +60,15 @@ async def test_mark_failed_moves_item_to_failed_and_updates_dedup(
     assert await dedup_status(state_dir / "dedup.db", item.content_hash) == ItemStatus.FAILED.value
 
 
+async def test_move_back_to_pending_moves_item(queue: Queue, sample_sms: IncomingSms) -> None:
+    item = await enqueue_and_claim(queue, sample_sms)
+
+    await queue.move_back_to_pending(item)
+
+    assert not (queue._dirs["processing"] / f"{item.id}.json").exists()
+    assert (queue._dirs["pending"] / f"{item.id}.json").exists()
+
+
 async def test_mark_sent_raises_item_not_found_when_processing_file_is_missing(
     queue: Queue,
     sample_sms: IncomingSms,
@@ -72,6 +81,20 @@ async def test_mark_sent_raises_item_not_found_when_processing_file_is_missing(
 
     with pytest.raises(ItemNotFound, match=missing.id):
         await queue.mark_sent(missing)
+
+
+async def test_move_back_to_pending_raises_item_not_found_for_missing_processing_file(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    missing = QueueItem(
+        id="1714149693000-0123456789abcdef0123456789abcdef",
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+    )
+
+    with pytest.raises(ItemNotFound, match=missing.id):
+        await queue.move_back_to_pending(missing)
 
 
 async def test_update_attempt_increments_attempts_and_persists_in_processing(

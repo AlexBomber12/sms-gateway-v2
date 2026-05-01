@@ -8,7 +8,7 @@ survival during long periods of inactivity.
 
 ## Status
 
-Sprint 5a of 8: delivery worker with retry scheduling.
+Sprint 5b of 8: SmsRelay orchestrator.
 
 ## Hardware Target
 
@@ -65,6 +65,7 @@ pytest
 |       |-- metrics/
 |       |-- modem/
 |       |-- queue/
+|       |-- relay/
 |       `-- telegram/
 `-- tests/
     |-- __init__.py
@@ -88,7 +89,7 @@ pytest
 2. [x] ModemManager D-Bus client with mocked tests.
 3. [x] Durable file queue and SQLite deduplication.
 4. [x] Telegram client and Prometheus metrics.
-5. [ ] Delivery worker (split into 5a and 5b).
+5. [ ] Delivery worker (5a done, 5b in progress, 5c pending FastAPI lifespan).
 6. [ ] Dockerfile and deploy compose.
 7. [ ] Active modem healthcheck and dead-man heartbeat.
 8. [ ] Production cutover from AI-Server.

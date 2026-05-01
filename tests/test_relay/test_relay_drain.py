@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, call
+
+import pytest
+
+from sms_gateway_v2.metrics import MetricsRegistry
+from sms_gateway_v2.modem import MessageDeleteFailed
+from sms_gateway_v2.queue import Queue
+from sms_gateway_v2.relay import SmsRelay
+from tests.test_relay.conftest import SmsFactory
+from tests.test_worker.helpers import metric_value
+
+
+async def test_start_drains_existing_messages_from_modem(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    metrics: MetricsRegistry,
+    sms_factory: SmsFactory,
+) -> None:
+    first = sms_factory(text="first")
+    second = sms_factory(
+        object_path="/org/freedesktop/ModemManager1/SMS/2",
+        text="second",
+    )
+    modem_client.list_messages.return_value = [first, second]
+    queue.enqueue = AsyncMock(wraps=queue.enqueue)
+
+    await relay.start()
+    try:
+        assert queue.enqueue.await_count == 2
+        modem_client.delete_message.assert_has_awaits(
+            [call(first.object_path), call(second.object_path)]
+        )
+        assert metric_value(metrics, "sms_received_total") == 2.0
+    finally:
+        await relay.stop()
+
+
+async def test_start_rolls_back_when_drain_enqueue_fails(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    sms_factory: SmsFactory,
+) -> None:
+    sms = sms_factory()
+    modem_client.list_messages.return_value = [sms]
+    queue.enqueue = AsyncMock(side_effect=RuntimeError("enqueue failed"))
+    queue.close = AsyncMock(wraps=queue.close)
+
+    with pytest.raises(RuntimeError, match="enqueue failed"):
+        await relay.start()
+
+    assert relay.state().status == "stopped"
+    assert relay.state().last_error == "enqueue failed"
+    modem_client.disconnect.assert_awaited_once()
+    queue.close.assert_awaited_once()
+    modem_client.delete_message.assert_not_awaited()
+
+
+async def test_start_rolls_back_when_drain_delete_fails(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    sms_factory: SmsFactory,
+) -> None:
+    sms = sms_factory()
+    modem_client.list_messages.return_value = [sms]
+    modem_client.delete_message.side_effect = MessageDeleteFailed("delete failed")
+    queue.close = AsyncMock(wraps=queue.close)
+
+    with pytest.raises(MessageDeleteFailed, match="delete failed"):
+        await relay.start()
+
+    assert relay.state().status == "stopped"
+    assert relay.state().last_error == "delete failed"
+    modem_client.disconnect.assert_awaited_once()
+    queue.close.assert_awaited_once()
+    modem_client.delete_message.assert_awaited_once_with(sms.object_path)
+
+
+async def test_start_handles_empty_drain_gracefully(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    metrics: MetricsRegistry,
+) -> None:
+    await relay.start()
+    try:
+        assert modem_client.list_messages.await_count == 1
+        modem_client.delete_message.assert_not_awaited()
+        assert metric_value(metrics, "sms_received_total") == 0.0
+    finally:
+        await relay.stop()

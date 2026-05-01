@@ -9,7 +9,6 @@ import structlog
 
 from sms_gateway_v2.metrics import MetricsRegistry
 from sms_gateway_v2.queue import Queue, QueueItem
-from sms_gateway_v2.queue.paths import atomic_move
 from sms_gateway_v2.telegram import (
     TelegramAuthError,
     TelegramClient,
@@ -70,7 +69,7 @@ class DeliveryWorker:
                 break
 
             skipped_item_ids.add(item.id)
-            await self._move_processing_to_pending(item)
+            await self._queue.move_back_to_pending(item)
 
         message = TelegramMessage.from_sms(
             chat_id=self._telegram_chat_id,
@@ -149,6 +148,10 @@ class DeliveryWorker:
         self._stop_event.set()
         self._wakeup_event.set()
 
+    def reset(self) -> None:
+        self._stop_event.clear()
+        self._wakeup_event.clear()
+
     def wakeup(self) -> None:
         self._wakeup_event.set()
 
@@ -182,7 +185,7 @@ class DeliveryWorker:
             delay_seconds = max(delay_seconds, retry_after)
         next_retry_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
         updated = await self._queue.update_attempt(item, next_retry_at=next_retry_at)
-        await self._move_processing_to_pending(updated)
+        await self._queue.move_back_to_pending(updated)
         self._metrics.telegram_send_total.labels(result="failure").inc()
         self._metrics.telegram_send_failures_total.labels(reason=reason).inc()
         logger.info(
@@ -194,7 +197,3 @@ class DeliveryWorker:
             reason=reason,
         )
         return True
-
-    async def _move_processing_to_pending(self, item: QueueItem) -> None:
-        dirs = self._queue._dirs_or_raise()
-        await asyncio.to_thread(atomic_move, item.id, dirs["processing"], dirs["pending"])

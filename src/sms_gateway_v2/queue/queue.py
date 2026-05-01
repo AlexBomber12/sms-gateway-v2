@@ -228,6 +228,25 @@ class Queue:
                 elapsed_ms=_elapsed_ms(started_at),
             )
 
+    async def move_back_to_pending(self, item: QueueItem) -> None:
+        started_at = time.monotonic()
+        async with self._lock:
+            self._dirs_or_raise()
+            try:
+                await asyncio.to_thread(
+                    atomic_move,
+                    item.id,
+                    self._dirs["processing"],
+                    self._dirs["pending"],
+                )
+            except FileNotFoundError as exc:
+                raise ItemNotFound(f"queue item not found in processing: {item.id}") from exc
+            logger.info(
+                "queue_item_moved_back_to_pending",
+                item_id=item.id,
+                elapsed_ms=_elapsed_ms(started_at),
+            )
+
     async def update_attempt(self, item: QueueItem, *, next_retry_at: datetime) -> QueueItem:
         started_at = time.monotonic()
         updated = item.model_copy(
