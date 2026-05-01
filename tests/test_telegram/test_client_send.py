@@ -72,7 +72,7 @@ async def test_send_message_returns_successfully_on_ok_response(
     sleep.assert_not_awaited()
 
 
-async def test_send_message_uses_configured_chat_id(
+async def test_send_message_uses_message_chat_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     post = AsyncMock(side_effect=[ok_response()])
@@ -83,7 +83,7 @@ async def test_send_message_uses_configured_chat_id(
 
     post.assert_awaited_once_with(
         "sendMessage",
-        json={"chat_id": "-configured", "text": "hello", "parse_mode": "HTML"},
+        json={"chat_id": "-message", "text": "hello", "parse_mode": "HTML"},
     )
 
 

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     modem_watchdog_signal_zero_threshold: int = Field(default=5, ge=1)
     modem_watchdog_bad_state_minutes: int = Field(default=10, ge=1)
     cleanup_interval_seconds: float = Field(default=3600.0, ge=60.0)
+    heartbeat_enabled: bool = True
+    heartbeat_interval_seconds: float = Field(default=86400.0, ge=60.0)
+    heartbeat_telegram_chat_id: str = ""
 
     @field_validator("worker_retry_schedule_seconds", mode="before")
     @classmethod

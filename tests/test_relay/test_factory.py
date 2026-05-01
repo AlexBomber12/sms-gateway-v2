@@ -8,6 +8,7 @@ from sms_gateway_v2.config import Settings
 from sms_gateway_v2.metrics import MetricsRegistry, QueueGaugeUpdater
 from sms_gateway_v2.relay import (
     CleanupScheduler,
+    HeartbeatScheduler,
     ModemWatchdog,
     RelayError,
     SmsRelay,
@@ -32,12 +33,15 @@ def test_build_relay_returns_relay_gauge_updater_and_watchdog(tmp_path: Path) ->
     settings = _settings(state_dir=tmp_path / "state")
     metrics = MetricsRegistry()
 
-    relay, gauge_updater, watchdog, cleanup_scheduler = build_relay(settings, metrics)
+    relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler = build_relay(
+        settings, metrics
+    )
 
     assert isinstance(relay, SmsRelay)
     assert isinstance(gauge_updater, QueueGaugeUpdater)
     assert isinstance(watchdog, ModemWatchdog)
     assert isinstance(cleanup_scheduler, CleanupScheduler)
+    assert isinstance(heartbeat_scheduler, HeartbeatScheduler)
     assert relay.telegram_client.bot_token == settings.telegram_bot_token
     assert relay.telegram_client.chat_id == settings.telegram_chat_id
 
@@ -51,7 +55,7 @@ def test_build_relay_uses_configured_gauge_interval(tmp_path: Path) -> None:
     )
     metrics = MetricsRegistry()
 
-    _, gauge_updater, _, _ = build_relay(settings, metrics)
+    _, gauge_updater, _, _, _ = build_relay(settings, metrics)
 
     assert gauge_updater._interval_seconds == 7.5
 
@@ -67,7 +71,7 @@ def test_build_relay_uses_configured_watchdog_settings(tmp_path: Path) -> None:
     )
     metrics = MetricsRegistry()
 
-    _, _, watchdog, _ = build_relay(settings, metrics)
+    _, _, watchdog, _, _ = build_relay(settings, metrics)
 
     assert watchdog._interval_seconds == 15.0
     assert watchdog._signal_zero_threshold == 2
@@ -85,7 +89,7 @@ def test_build_relay_uses_configured_cleanup_settings(tmp_path: Path) -> None:
     )
     metrics = MetricsRegistry()
 
-    _, _, _, cleanup_scheduler = build_relay(settings, metrics)
+    _, _, _, cleanup_scheduler, _ = build_relay(settings, metrics)
 
     assert cleanup_scheduler._sent_retention_days == 7
     assert cleanup_scheduler._failed_retention_days == 14
