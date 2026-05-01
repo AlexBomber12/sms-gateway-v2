@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from datetime import datetime
+from html import escape
 
 import structlog
 
@@ -41,12 +42,13 @@ class HeartbeatScheduler:
 
     async def _send_heartbeat(self) -> None:
         state = self._relay.state()
+        last_error = escape(state.last_error) if state.last_error else "(none)"
         text = (
             "<b>SMS Gateway v2: alive</b>\n"
-            f"Status: {state.status}\n"
+            f"Status: {escape(state.status)}\n"
             f"Started: {_format_timestamp(state.started_at)}\n"
             f"Last SMS: {_format_timestamp(state.last_sms_received_at)}\n"
-            f"Last error: {state.last_error if state.last_error else '(none)'}"
+            f"Last error: {last_error}"
         )
         message = TelegramMessage(chat_id=self._chat_id, text=text)
         try:

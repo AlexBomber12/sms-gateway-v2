@@ -77,7 +77,7 @@ class TelegramClient:
                 duration_ms=0,
             )
             try:
-                payload = {"chat_id": self.chat_id, "text": message.text}
+                payload = {"chat_id": message.chat_id, "text": message.text}
                 if message.parse_mode is not None:
                     payload["parse_mode"] = message.parse_mode
                 response = await client.post(

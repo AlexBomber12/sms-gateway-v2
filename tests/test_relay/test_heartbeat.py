@@ -66,6 +66,23 @@ async def test_send_heartbeat_sends_message_with_current_state() -> None:
     assert "Last error: something" in sent_message.text
 
 
+async def test_send_heartbeat_escapes_html_in_last_error() -> None:
+    telegram_client = _make_telegram_client()
+    relay = _make_relay(last_error="<b>boom</b> & oops")
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=86400.0,
+    )
+
+    await scheduler._send_heartbeat()
+
+    sent_message = telegram_client.send_message.await_args.args[0]
+    assert "Last error: &lt;b&gt;boom&lt;/b&gt; &amp; oops" in sent_message.text
+    assert "<b>boom</b>" not in sent_message.text
+
+
 async def test_send_heartbeat_renders_none_values_as_placeholder() -> None:
     telegram_client = _make_telegram_client()
     relay = _make_relay(started_at=None, last_sms_received_at=None, last_error=None)
