@@ -7,6 +7,7 @@ from sms_gateway_v2.queue import Queue
 from sms_gateway_v2.telegram import TelegramClient
 from sms_gateway_v2.worker import DeliveryWorker
 
+from .cleanup_scheduler import CleanupScheduler
 from .exceptions import RelayError
 from .relay import SmsRelay
 from .watchdog import ModemWatchdog
@@ -15,7 +16,7 @@ from .watchdog import ModemWatchdog
 def build_relay(
     settings: Settings,
     metrics: MetricsRegistry,
-) -> tuple[SmsRelay, QueueGaugeUpdater, ModemWatchdog]:
+) -> tuple[SmsRelay, QueueGaugeUpdater, ModemWatchdog, CleanupScheduler]:
     if settings.telegram_bot_token == "":
         raise RelayError("telegram_bot_token must not be empty when relay_enabled is true")
     if settings.telegram_chat_id == "":
@@ -59,4 +60,10 @@ def build_relay(
         signal_zero_threshold=settings.modem_watchdog_signal_zero_threshold,
         bad_state_minutes=settings.modem_watchdog_bad_state_minutes,
     )
-    return relay, gauge_updater, watchdog
+    cleanup_scheduler = CleanupScheduler(
+        queue=queue,
+        sent_retention_days=settings.queue_sent_retention_days,
+        failed_retention_days=settings.queue_failed_retention_days,
+        interval_seconds=settings.cleanup_interval_seconds,
+    )
+    return relay, gauge_updater, watchdog, cleanup_scheduler

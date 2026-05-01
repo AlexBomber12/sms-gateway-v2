@@ -17,6 +17,7 @@ router = APIRouter()
 
 GAUGE_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 WATCHDOG_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
+CLEANUP_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 
 @router.get("/healthz")
@@ -67,7 +68,7 @@ def create_app() -> FastAPI:
 
 
 async def _startup_relay(app: FastAPI, settings: Settings, metrics: MetricsRegistry) -> None:
-    relay, gauge_updater, watchdog = build_relay(settings, metrics)
+    relay, gauge_updater, watchdog, cleanup_scheduler = build_relay(settings, metrics)
     telegram_client = relay.telegram_client
     await telegram_client.__aenter__()
     try:
@@ -76,11 +77,14 @@ async def _startup_relay(app: FastAPI, settings: Settings, metrics: MetricsRegis
         await telegram_client.__aexit__(None, None, None)
         raise
     gauge_task = asyncio.create_task(gauge_updater.run())
+    cleanup_task = asyncio.create_task(cleanup_scheduler.run())
     watchdog_task = asyncio.create_task(watchdog.run())
     app.state.relay = relay
     app.state.telegram_client = telegram_client
     app.state.gauge_updater = gauge_updater
     app.state.gauge_task = gauge_task
+    app.state.cleanup_scheduler = cleanup_scheduler
+    app.state.cleanup_task = cleanup_task
     app.state.watchdog = watchdog
     app.state.watchdog_task = watchdog_task
 
@@ -90,6 +94,8 @@ async def _shutdown_relay(app: FastAPI) -> None:
     telegram_client = app.state.telegram_client
     gauge_updater = app.state.gauge_updater
     gauge_task = app.state.gauge_task
+    cleanup_scheduler = app.state.cleanup_scheduler
+    cleanup_task = app.state.cleanup_task
     watchdog = app.state.watchdog
     watchdog_task = app.state.watchdog_task
     gauge_updater.stop()
@@ -99,6 +105,13 @@ async def _shutdown_relay(app: FastAPI) -> None:
         gauge_task.cancel()
         with suppress(asyncio.CancelledError, Exception):
             await gauge_task
+    cleanup_scheduler.stop()
+    try:
+        await asyncio.wait_for(cleanup_task, timeout=CLEANUP_TASK_SHUTDOWN_TIMEOUT_SECONDS)
+    except TimeoutError:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await cleanup_task
     watchdog.stop()
     try:
         await asyncio.wait_for(watchdog_task, timeout=WATCHDOG_TASK_SHUTDOWN_TIMEOUT_SECONDS)
