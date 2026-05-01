@@ -87,7 +87,7 @@ serving production. They confirm v2 is ready before the SIM is moved.
    SIM:
    ```bash
    mmcli -m 0
-   mmcli -m 0 --messaging-list
+   mmcli -m 0 --messaging-list-sms
    ```
    The state should be `registered` (or `connected`) and the
    operator should match MTS-roaming-on-Italian-network.
@@ -157,7 +157,7 @@ within the first hour after cutover, revert to v1:
 4. **File a bug.** Open an issue in this repository titled
    `cutover failed on YYYY-MM-DD`, attaching:
    - `docker compose -f deploy/docker-compose.yml logs --no-color sms-gateway-v2 > v2.log`
-   - The output of `mmcli -m 0` and `mmcli -m 0 --messaging-list`
+   - The output of `mmcli -m 0` and `mmcli -m 0 --messaging-list-sms`
      captured before reverting
    - Anything Telegram itself returned (HTTP errors, 4xx codes)
 
