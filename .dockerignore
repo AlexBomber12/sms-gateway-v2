@@ -24,6 +24,7 @@ state
 artifacts
 tasks
 .env
+**/.env
 *.db
 *.db-journal
 *.db-wal
