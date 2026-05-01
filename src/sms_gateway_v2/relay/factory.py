@@ -9,12 +9,13 @@ from sms_gateway_v2.worker import DeliveryWorker
 
 from .exceptions import RelayError
 from .relay import SmsRelay
+from .watchdog import ModemWatchdog
 
 
 def build_relay(
     settings: Settings,
     metrics: MetricsRegistry,
-) -> tuple[SmsRelay, QueueGaugeUpdater]:
+) -> tuple[SmsRelay, QueueGaugeUpdater, ModemWatchdog]:
     if settings.telegram_bot_token == "":
         raise RelayError("telegram_bot_token must not be empty when relay_enabled is true")
     if settings.telegram_chat_id == "":
@@ -51,4 +52,11 @@ def build_relay(
         metrics=metrics,
         interval_seconds=settings.queue_gauge_interval_seconds,
     )
-    return relay, gauge_updater
+    watchdog = ModemWatchdog(
+        modem_client=modem_client,
+        metrics=metrics,
+        interval_seconds=settings.modem_watchdog_interval_seconds,
+        signal_zero_threshold=settings.modem_watchdog_signal_zero_threshold,
+        bad_state_minutes=settings.modem_watchdog_bad_state_minutes,
+    )
+    return relay, gauge_updater, watchdog
