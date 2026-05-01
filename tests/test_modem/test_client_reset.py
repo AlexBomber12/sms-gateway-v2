@@ -11,6 +11,7 @@ from tests.test_modem.factories import make_fake_messaging_proxy
 MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
 REDISCOVERED_MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/1"
+SMS_PATH = "/org/freedesktop/ModemManager1/SMS/1"
 
 
 @pytest.fixture
@@ -53,11 +54,12 @@ async def test_reset_clears_cached_modem_path_so_next_operation_rediscovers(
     assert client._modem_path is None
 
 
-async def test_reset_clears_watch_keys_and_marks_resubscribe_required(
+async def test_reset_unsubscribes_existing_watchers_and_marks_resubscribe_required(
     fake_bus: MagicMock,
     fake_reset_proxy: MagicMock,
+    fake_messaging_proxy: MagicMock,
 ) -> None:
-    fake_bus.get_proxy_object.return_value = fake_reset_proxy
+    fake_bus.get_proxy_object.side_effect = [fake_messaging_proxy, fake_reset_proxy]
     client = ModemManagerClient()
     client._bus = fake_bus
     client._modem_path = MODEM_PATH
@@ -65,14 +67,93 @@ async def test_reset_clears_watch_keys_and_marks_resubscribe_required(
     async def callback(_sms_path: str) -> None:
         return None
 
+    await client.watch_added(callback)
     callback_key = client._callback_key(callback)
-    client._added_callbacks[callback_key] = callback
-    client._added_watch_keys.add((MODEM_PATH, callback_key))
+    registered_handler = fake_messaging_proxy.messaging.added_handler
 
     await client.reset()
 
+    fake_messaging_proxy.messaging.off_added.assert_called_once_with(registered_handler)
     assert client._added_watch_keys == set()
+    assert client._added_watch_handlers == {}
     assert client._added_watch_resubscribe_required is True
+    assert callback_key in client._added_callbacks
+
+
+async def test_reset_logs_when_unsubscribing_existing_watcher_fails(
+    fake_bus: MagicMock,
+    fake_reset_proxy: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_bus.get_proxy_object.side_effect = [fake_messaging_proxy, fake_reset_proxy]
+    fake_messaging_proxy.messaging.off_added = MagicMock(
+        side_effect=DBusError("org.freedesktop.DBus.Error.NoReply", "off_added timed out")
+    )
+    captured_logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.modem.client.logger", captured_logger)
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def callback(_sms_path: str) -> None:
+        return None
+
+    await client.watch_added(callback)
+
+    await client.reset()
+
+    captured_logger.info.assert_any_call(
+        "added_watch_unsubscribe_failed",
+        modem_path=MODEM_PATH,
+        error="off_added timed out",
+    )
+    assert client._added_watch_keys == set()
+    assert client._added_watch_handlers == {}
+    assert client._added_watch_resubscribe_required is True
+
+
+async def test_reset_does_not_redeliver_through_old_handler_when_path_unchanged(
+    fake_bus: MagicMock,
+    fake_reset_proxy: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    object_manager = MagicMock()
+    object_manager.call_get_managed_objects = AsyncMock(
+        return_value={MODEM_PATH: {MODEM_INTERFACE: object()}}
+    )
+    object_manager_proxy = MagicMock()
+    object_manager_proxy.get_interface.return_value = object_manager
+    fake_bus.get_proxy_object.side_effect = [
+        fake_messaging_proxy,
+        fake_reset_proxy,
+        object_manager_proxy,
+        fake_messaging_proxy,
+        fake_modem_proxy,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    received_paths: list[str] = []
+
+    async def callback(sms_path: str) -> None:
+        received_paths.append(sms_path)
+
+    await client.watch_added(callback)
+    first_handler = fake_messaging_proxy.messaging.added_handler
+    await client.reset()
+    await client.get_signal_quality()
+    second_handler = fake_messaging_proxy.messaging.added_handler
+
+    assert first_handler is not None
+    assert second_handler is not None
+    assert second_handler is not first_handler
+    fake_messaging_proxy.messaging.off_added.assert_called_once_with(first_handler)
+    assert fake_messaging_proxy.messaging.on_added.call_count == 2
+    assert client._added_watch_keys == {
+        (MODEM_PATH, client._callback_key(callback)),
+    }
 
 
 async def test_reset_does_not_mark_resubscribe_when_no_callbacks_registered(

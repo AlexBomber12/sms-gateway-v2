@@ -146,6 +146,8 @@ class MessagingInterface(Protocol):
 
     def on_added(self, callback: Callable[[str, bool], None]) -> None: ...
 
+    def off_added(self, callback: Callable[[str, bool], None]) -> None: ...
+
 
 class SmsInterface(Protocol):
     async def get_number(self) -> str: ...
@@ -164,6 +166,10 @@ class ModemManagerClient:
         self._watch_tasks: set[asyncio.Future[None]] = set()
         self._added_callbacks: dict[CallbackKey, AddedCallback] = {}
         self._added_watch_keys: set[tuple[str, CallbackKey]] = set()
+        self._added_watch_handlers: dict[
+            tuple[str, CallbackKey],
+            tuple[MessagingInterface, Callable[[str, bool], None]],
+        ] = {}
         self._added_watch_resubscribe_required = False
 
     async def connect(self) -> None:
@@ -177,6 +183,7 @@ class ModemManagerClient:
             self._bus = None
             self._modem_path = None
             self._added_watch_keys.clear()
+            self._added_watch_handlers.clear()
             self._added_watch_resubscribe_required = bool(self._added_callbacks)
 
         started_at = time.monotonic()
@@ -198,11 +205,11 @@ class ModemManagerClient:
         if self._bus is None:
             return
 
+        self._unsubscribe_all_added_watchers()
         self._bus.disconnect()
         self._bus = None
         self._modem_path = None
         self._added_callbacks.clear()
-        self._added_watch_keys.clear()
         self._added_watch_resubscribe_required = False
         logger.info("client_disconnected")
 
@@ -384,7 +391,7 @@ class ModemManagerClient:
             modem_path=modem_path,
         )
         self._modem_path = None
-        self._added_watch_keys.clear()
+        self._unsubscribe_all_added_watchers()
         self._added_watch_resubscribe_required = bool(self._added_callbacks)
 
     async def list_messages(self) -> list[IncomingSms]:
@@ -491,11 +498,32 @@ class ModemManagerClient:
             modem_path, messaging = await self._get_messaging_interface(modem_path)
             watch_key = (modem_path, callback_key)
             if watch_key not in self._added_watch_keys:
-                messaging.on_added(self._build_added_handler(modem_path, callback))
+                handler = self._build_added_handler(modem_path, callback)
+                messaging.on_added(handler)
                 self._added_watch_keys.add(watch_key)
+                self._added_watch_handlers[watch_key] = (messaging, handler)
+
+    def _unsubscribe_added_watcher(self, watch_key: tuple[str, CallbackKey]) -> None:
+        self._added_watch_keys.discard(watch_key)
+        info = self._added_watch_handlers.pop(watch_key, None)
+        if info is not None:
+            messaging, handler = info
+            try:
+                messaging.off_added(handler)
+            except DBUS_OPERATION_ERRORS as exc:
+                logger.info(
+                    "added_watch_unsubscribe_failed",
+                    modem_path=watch_key[0],
+                    error=str(exc),
+                )
+
+    def _unsubscribe_all_added_watchers(self) -> None:
+        for watch_key in list(self._added_watch_handlers):
+            self._unsubscribe_added_watcher(watch_key)
+        self._added_watch_keys.clear()
 
     async def _resubscribe_added_watchers(self, modem_path: str) -> None:
-        self._added_watch_keys.clear()
+        self._unsubscribe_all_added_watchers()
         await self._subscribe_missing_added_watchers(modem_path)
 
     async def _subscribe_missing_added_watchers(self, modem_path: str) -> None:
