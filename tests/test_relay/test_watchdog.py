@@ -12,8 +12,8 @@ from sms_gateway_v2.modem.models import RegistrationState, SignalQuality
 from sms_gateway_v2.relay.watchdog import ModemWatchdog
 
 
-def _signal(percent: int) -> SignalQuality:
-    return SignalQuality(percent=percent, recent=True)
+def _signal(percent: int, *, recent: bool = True) -> SignalQuality:
+    return SignalQuality(percent=percent, recent=recent)
 
 
 @pytest.fixture
@@ -203,6 +203,41 @@ async def test_reset_failure_does_not_terminate_watchdog_loop(
     modem_client.reset.assert_awaited_once_with()
     assert watchdog._consecutive_zero_signal_polls == 0
     assert metrics.registry.get_sample_value("modem_resets_total") == 0.0
+
+
+async def test_stale_zero_signal_does_not_increment_zero_counter(
+    watchdog: ModemWatchdog,
+    modem_client: MagicMock,
+    metrics: MetricsRegistry,
+) -> None:
+    modem_client.get_signal_quality.return_value = _signal(0, recent=False)
+    modem_client.get_registration_state.return_value = RegistrationState.ROAMING
+
+    for _ in range(5):
+        await watchdog._poll_once()
+
+    assert watchdog._consecutive_zero_signal_polls == 0
+    modem_client.reset.assert_not_awaited()
+    assert metrics.registry.get_sample_value("modem_resets_total") == 0.0
+    assert metrics.registry.get_sample_value("modem_signal_percent") == 0.0
+
+
+async def test_stale_signal_preserves_existing_zero_counter(
+    watchdog: ModemWatchdog,
+    modem_client: MagicMock,
+) -> None:
+    modem_client.get_registration_state.return_value = RegistrationState.ROAMING
+
+    modem_client.get_signal_quality.return_value = _signal(0)
+    await watchdog._poll_once()
+    await watchdog._poll_once()
+    assert watchdog._consecutive_zero_signal_polls == 2
+
+    modem_client.get_signal_quality.return_value = _signal(45, recent=False)
+    await watchdog._poll_once()
+
+    assert watchdog._consecutive_zero_signal_polls == 2
+    modem_client.reset.assert_not_awaited()
 
 
 async def test_reset_failure_allows_subsequent_reset_attempts(

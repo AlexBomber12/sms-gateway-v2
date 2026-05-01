@@ -61,7 +61,13 @@ class ModemWatchdog:
             value = 1 if known_state == state else 0
             self._metrics.modem_state.labels(state=known_state.value).set(value)
 
-        if signal.percent == 0:
+        if not signal.recent:
+            logger.info(
+                "watchdog_signal_stale_skipped",
+                percent=signal.percent,
+                consecutive_zero_signal_polls=self._consecutive_zero_signal_polls,
+            )
+        elif signal.percent == 0:
             self._consecutive_zero_signal_polls += 1
         else:
             self._consecutive_zero_signal_polls = 0
