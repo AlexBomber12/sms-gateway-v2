@@ -107,23 +107,53 @@ class SmsRelay:
             return
 
         self._status = "stopping"
-        self._worker.stop()
-        if self._worker_task is not None:
-            try:
-                await asyncio.wait_for(self._worker_task, timeout=5.0)
-            except TimeoutError:
-                self._worker_task.cancel()
-                with suppress(asyncio.CancelledError, Exception):
-                    await self._worker_task
-            except Exception:
-                pass
+        stop_error: Exception | None = None
+        try:
+            self._worker.stop()
+            await self._wait_for_worker_shutdown()
+            stop_error = await self._disconnect_and_close()
+        finally:
+            self._status = "stopped"
+            self._worker_task = None
+            self._started_at = None
+            logger.info("relay_stopped")
 
-        await self._modem_client.disconnect()
-        await self._queue.close()
-        self._status = "stopped"
-        self._worker_task = None
-        self._started_at = None
-        logger.info("relay_stopped")
+        if stop_error is not None:
+            raise stop_error
+
+    async def _wait_for_worker_shutdown(self) -> None:
+        if self._worker_task is None:
+            return
+
+        try:
+            await asyncio.wait_for(self._worker_task, timeout=5.0)
+        except TimeoutError:
+            self._worker_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await self._worker_task
+        except asyncio.CancelledError:
+            logger.info("relay_worker_task_already_cancelled")
+        except Exception:
+            pass
+
+    async def _disconnect_and_close(self) -> Exception | None:
+        stop_error: Exception | None = None
+        try:
+            await self._modem_client.disconnect()
+        except Exception as exc:
+            stop_error = exc
+            self._last_error = str(exc)
+            logger.exception("relay_disconnect_failed", error=str(exc))
+
+        try:
+            await self._queue.close()
+        except Exception as exc:
+            if stop_error is None:
+                stop_error = exc
+            self._last_error = str(exc)
+            logger.exception("relay_queue_close_failed", error=str(exc))
+
+        return stop_error
 
     async def _on_new_sms(self, sms_path: str) -> None:
         try:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -260,6 +261,71 @@ async def test_stop_cancels_worker_task_after_timeout(
 
     assert task.cancelled()
     assert relay.state().status == "stopped"
+
+
+async def test_stop_cleans_up_when_worker_task_was_already_cancelled(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+) -> None:
+    await relay.start()
+    queue.close = AsyncMock(wraps=queue.close)
+    task = relay._worker_task
+    assert task is not None
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    await relay.stop()
+
+    assert task.cancelled()
+    assert relay.state().status == "stopped"
+    modem_client.disconnect.assert_awaited_once()
+    queue.close.assert_awaited_once()
+
+
+async def test_stop_finalizes_state_and_closes_queue_when_disconnect_fails(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+) -> None:
+    await relay.start()
+    modem_client.disconnect = AsyncMock(side_effect=RuntimeError("disconnect failed"))
+    queue.close = AsyncMock(wraps=queue.close)
+
+    with pytest.raises(RuntimeError, match="disconnect failed"):
+        await relay.stop()
+
+    assert relay.state().status == "stopped"
+    assert relay.state().started_at is None
+    assert relay.state().last_error == "disconnect failed"
+    assert relay._worker_task is None
+    modem_client.disconnect.assert_awaited_once()
+    queue.close.assert_awaited_once()
+
+
+async def test_stop_finalizes_state_when_queue_close_fails(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+) -> None:
+    original_close = queue.close
+    await relay.start()
+    queue.close = AsyncMock(side_effect=RuntimeError("close failed"))
+
+    try:
+        with pytest.raises(RuntimeError, match="close failed"):
+            await relay.stop()
+
+        assert relay.state().status == "stopped"
+        assert relay.state().started_at is None
+        assert relay.state().last_error == "close failed"
+        assert relay._worker_task is None
+        modem_client.disconnect.assert_awaited_once()
+        queue.close.assert_awaited_once()
+    finally:
+        queue.close = original_close
+        await queue.close()
 
 
 async def test_stop_without_worker_task_still_disconnects_and_closes(
