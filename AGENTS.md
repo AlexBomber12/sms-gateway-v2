@@ -72,7 +72,7 @@ Project-specific equivalents for orchestrator-level concepts:
 - Integration tests in this project: `tests/integration/`, marked with `integration`, skipped by default.
 - E2E tests in this project: `tests/e2e/`, marked with `e2e`, skipped by default.
 - This project has no external testbed repository.
-- CI workflow: `.github/workflows/ci.yml` running ruff, mypy, and pytest with 100% coverage gate.
+- CI workflow: `.github/workflows/ci.yml` running `ruff check`, `ruff format --check`, `mypy src`, and `pytest --cov-fail-under=100`. 100% line coverage gate enforced.
 - This project has no `task_status.py` module; it is not part of pipeline-orchestrator.
 
 <!-- pipeline-orchestrator: managed BEGIN work_modes -->
