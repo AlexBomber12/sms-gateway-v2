@@ -21,29 +21,46 @@ This guide covers running `sms-gateway-v2` on the NAS host
 ## Polkit configuration
 
 The container runs as uid `1000` and talks to ModemManager over the host
-system D-Bus. ModemManager gates most of its interfaces behind polkit, and
-polkit identifies callers by uid even when they cross the container
-boundary. The container's uid `1000` is treated as a distinct identity from
-any host user; granting access requires a dedicated rule.
+system D-Bus. With Docker's default (no user-namespace remapping) the
+container's uid `1000` is the same identity as the host account that owns
+uid `1000`, so polkit sees that host user as the caller. ModemManager gates
+most of its interfaces behind polkit, so granting access requires a
+dedicated rule.
+
+Polkit `.rules` files use a JavaScript API where `subject.user` is the
+caller's **username string**, not a UID — the legacy `"#1000"` syntax only
+works in the deprecated `.pkla` format and silently never matches here.
+The portable fix is to match on group membership instead: create a
+dedicated group, add the host user that owns uid `1000` to it, then have
+the rule check `subject.isInGroup(...)`.
+
+Create the group and add the host user that maps to the container uid:
+
+```bash
+sudo groupadd -f sms-gateway
+sudo usermod -aG sms-gateway "$(getent passwd 1000 | cut -d: -f1)"
+```
 
 Create `/etc/polkit-1/rules.d/50-sms-gateway-v2.rules` on the host with:
 
 ```javascript
-// Allow uid 1000 (the sms-gateway-v2 container user) to manage modems
-// and read SMS via ModemManager. Limit to ModemManager interfaces only.
+// Allow members of the sms-gateway group (which includes the host user
+// whose uid the container shares) to manage modems and read SMS via
+// ModemManager. Limit to ModemManager interfaces only.
 polkit.addRule(function(action, subject) {
-    if (subject.user == "#1000" || subject.local && subject.user == 1000) {
-        if (action.id.indexOf("org.freedesktop.ModemManager1.") === 0) {
-            return polkit.Result.YES;
-        }
+    if (action.id.indexOf("org.freedesktop.ModemManager1.") === 0 &&
+        subject.isInGroup("sms-gateway")) {
+        return polkit.Result.YES;
     }
 });
 ```
 
-Reload polkit so the rule takes effect:
+Reload polkit so the rule takes effect, then restart the container so its
+process picks up the new group membership:
 
 ```bash
 sudo systemctl restart polkit
+docker compose -f deploy/docker-compose.yml restart sms-gateway-v2
 ```
 
 ### Alternative: run the container as root

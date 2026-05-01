@@ -2,8 +2,10 @@
 #
 # Prerequisites on the host:
 #   - ModemManager is installed and active on the system bus.
-#   - A polkit rule grants uid 1000 access to org.freedesktop.ModemManager1.
-#     See docs/deploy.md for the exact rule and alternatives.
+#   - A polkit rule grants the sms-gateway group access to
+#     org.freedesktop.ModemManager1, and the host user that owns uid 1000
+#     is a member of that group. See docs/deploy.md for the exact rule
+#     and the alternative of running the container as root.
 #   - A .env file lives next to this compose file with at least:
 #       RELAY_ENABLED=true
 #       TELEGRAM_BOT_TOKEN=...
