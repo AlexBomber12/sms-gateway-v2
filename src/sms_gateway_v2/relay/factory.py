@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from sms_gateway_v2.config import Settings
-from sms_gateway_v2.metrics import MetricsRegistry
+from sms_gateway_v2.metrics import MetricsRegistry, QueueGaugeUpdater
 from sms_gateway_v2.modem import ModemManagerClient
 from sms_gateway_v2.queue import Queue
 from sms_gateway_v2.telegram import TelegramClient
@@ -11,7 +11,10 @@ from .exceptions import RelayError
 from .relay import SmsRelay
 
 
-def build_relay(settings: Settings, metrics: MetricsRegistry) -> SmsRelay:
+def build_relay(
+    settings: Settings,
+    metrics: MetricsRegistry,
+) -> tuple[SmsRelay, QueueGaugeUpdater]:
     if settings.telegram_bot_token == "":
         raise RelayError("telegram_bot_token must not be empty when relay_enabled is true")
     if settings.telegram_chat_id == "":
@@ -36,10 +39,16 @@ def build_relay(settings: Settings, metrics: MetricsRegistry) -> SmsRelay:
         metrics=metrics,
         retry_schedule_seconds=settings.worker_retry_schedule_seconds,
     )
-    return SmsRelay(
+    relay = SmsRelay(
         modem_client=modem_client,
         queue=queue,
         telegram_client=telegram_client,
         worker=worker,
         metrics=metrics,
     )
+    gauge_updater = QueueGaugeUpdater(
+        queue=queue,
+        metrics=metrics,
+        interval_seconds=settings.queue_gauge_interval_seconds,
+    )
+    return relay, gauge_updater

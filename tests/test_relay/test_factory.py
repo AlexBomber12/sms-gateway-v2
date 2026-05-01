@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from sms_gateway_v2.config import Settings
-from sms_gateway_v2.metrics import MetricsRegistry
+from sms_gateway_v2.metrics import MetricsRegistry, QueueGaugeUpdater
 from sms_gateway_v2.relay import RelayError, SmsRelay, build_relay
 
 
@@ -22,15 +22,30 @@ def _settings(
     )
 
 
-def test_build_relay_returns_relay(tmp_path: Path) -> None:
+def test_build_relay_returns_relay_and_gauge_updater(tmp_path: Path) -> None:
     settings = _settings(state_dir=tmp_path / "state")
     metrics = MetricsRegistry()
 
-    relay = build_relay(settings, metrics)
+    relay, gauge_updater = build_relay(settings, metrics)
 
     assert isinstance(relay, SmsRelay)
+    assert isinstance(gauge_updater, QueueGaugeUpdater)
     assert relay.telegram_client.bot_token == settings.telegram_bot_token
     assert relay.telegram_client.chat_id == settings.telegram_chat_id
+
+
+def test_build_relay_uses_configured_gauge_interval(tmp_path: Path) -> None:
+    settings = Settings(
+        state_dir=tmp_path / "state",
+        telegram_bot_token="test-token",
+        telegram_chat_id="-100200300",
+        queue_gauge_interval_seconds=7.5,
+    )
+    metrics = MetricsRegistry()
+
+    _, gauge_updater = build_relay(settings, metrics)
+
+    assert gauge_updater._interval_seconds == 7.5
 
 
 def test_build_relay_raises_when_token_empty(tmp_path: Path) -> None:
