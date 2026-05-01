@@ -101,6 +101,78 @@ async def test_send_heartbeat_renders_none_values_as_placeholder() -> None:
     assert "Last error: (none)" in sent_message.text
 
 
+async def test_send_heartbeat_swallows_validation_error_from_oversized_last_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    telegram_client = _make_telegram_client()
+    relay = _make_relay(last_error="x" * 5000)
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=86400.0,
+    )
+
+    log_events: list[tuple[str, dict[str, Any]]] = []
+
+    class CapturingLogger:
+        def info(self, event: str, **kwargs: Any) -> None:
+            log_events.append((event, kwargs))
+
+        def warning(self, event: str, **kwargs: Any) -> None:
+            log_events.append((event, kwargs))
+
+    monkeypatch.setattr(heartbeat_module, "logger", CapturingLogger())
+
+    await scheduler._send_heartbeat()
+
+    telegram_client.send_message.assert_not_awaited()
+    assert any(event == "heartbeat_send_failed" for event, _ in log_events)
+
+
+async def test_run_keeps_looping_after_validation_error() -> None:
+    telegram_client = _make_telegram_client()
+    states = [
+        RelayState(
+            status="running",
+            started_at=datetime(2026, 5, 1, 18, 0, 0, tzinfo=UTC),
+            last_sms_received_at=None,
+            last_error="x" * 5000,
+        ),
+        RelayState(
+            status="running",
+            started_at=datetime(2026, 5, 1, 18, 0, 0, tzinfo=UTC),
+            last_sms_received_at=None,
+            last_error=None,
+        ),
+    ]
+    relay = MagicMock(spec=SmsRelay)
+    relay.state = MagicMock(side_effect=states)
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=0.01,
+    )
+
+    sent_calls = 0
+    original_send = scheduler._send_heartbeat
+
+    async def counting_send() -> None:
+        nonlocal sent_calls
+        sent_calls += 1
+        await original_send()
+        if sent_calls >= 2:
+            scheduler.stop()
+
+    scheduler._send_heartbeat = counting_send  # type: ignore[method-assign]
+
+    await asyncio.wait_for(scheduler.run(), timeout=1.0)
+
+    assert sent_calls == 2
+    telegram_client.send_message.assert_awaited_once()
+
+
 async def test_send_heartbeat_swallows_telegram_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -6,6 +6,7 @@ from datetime import datetime
 from html import escape
 
 import structlog
+from pydantic import ValidationError
 
 from sms_gateway_v2.relay.relay import SmsRelay
 from sms_gateway_v2.telegram import TelegramClient
@@ -50,10 +51,10 @@ class HeartbeatScheduler:
             f"Last SMS: {_format_timestamp(state.last_sms_received_at)}\n"
             f"Last error: {last_error}"
         )
-        message = TelegramMessage(chat_id=self._chat_id, text=text)
         try:
+            message = TelegramMessage(chat_id=self._chat_id, text=text)
             await self._telegram_client.send_message(message)
-        except TelegramError as exc:
+        except (TelegramError, ValidationError) as exc:
             logger.warning("heartbeat_send_failed", error=str(exc))
         else:
             logger.info("heartbeat_sent", chat_id=self._chat_id)
