@@ -10,7 +10,13 @@ from fastapi.testclient import TestClient
 
 from sms_gateway_v2 import app as app_module
 from sms_gateway_v2.metrics import QueueGaugeUpdater
-from sms_gateway_v2.relay import CleanupScheduler, ModemWatchdog, RelayError, SmsRelay
+from sms_gateway_v2.relay import (
+    CleanupScheduler,
+    HeartbeatScheduler,
+    ModemWatchdog,
+    RelayError,
+    SmsRelay,
+)
 from sms_gateway_v2.relay.models import RelayState
 from sms_gateway_v2.telegram import TelegramClient
 
@@ -45,6 +51,13 @@ def _make_cleanup_scheduler() -> MagicMock:
     return cleanup_scheduler
 
 
+def _make_heartbeat_scheduler() -> MagicMock:
+    heartbeat_scheduler = MagicMock(spec=HeartbeatScheduler)
+    heartbeat_scheduler.run = AsyncMock()
+    heartbeat_scheduler.stop = MagicMock()
+    return heartbeat_scheduler
+
+
 def test_relay_disabled_skips_lifespan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
@@ -61,6 +74,7 @@ def test_relay_enabled_calls_start_and_stop(
     monkeypatch: pytest.MonkeyPatch, relay_env: None
 ) -> None:
     monkeypatch.setenv("RELAY_ENABLED", "true")
+    monkeypatch.setenv("HEARTBEAT_ENABLED", "true")
 
     telegram_client = MagicMock(spec=TelegramClient)
     telegram_client.__aenter__ = AsyncMock(return_value=telegram_client)
@@ -74,15 +88,19 @@ def test_relay_enabled_calls_start_and_stop(
     gauge_updater = _make_gauge_updater()
     watchdog = _make_watchdog()
     cleanup_scheduler = _make_cleanup_scheduler()
+    heartbeat_scheduler = _make_heartbeat_scheduler()
 
     call_order: list[str] = []
     relay.start.side_effect = lambda: call_order.append("relay_start")
     gauge_updater.stop.side_effect = lambda: call_order.append("gauge_stop")
     cleanup_scheduler.stop.side_effect = lambda: call_order.append("cleanup_stop")
     watchdog.stop.side_effect = lambda: call_order.append("watchdog_stop")
+    heartbeat_scheduler.stop.side_effect = lambda: call_order.append("heartbeat_stop")
     relay.stop.side_effect = lambda: call_order.append("relay_stop")
 
-    fake_build_relay = MagicMock(return_value=(relay, gauge_updater, watchdog, cleanup_scheduler))
+    fake_build_relay = MagicMock(
+        return_value=(relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler)
+    )
     monkeypatch.setattr(app_module, "build_relay", fake_build_relay)
 
     app = app_module.create_app()
@@ -100,13 +118,51 @@ def test_relay_enabled_calls_start_and_stop(
     cleanup_scheduler.stop.assert_called_once()
     watchdog.run.assert_awaited_once()
     watchdog.stop.assert_called_once()
+    heartbeat_scheduler.run.assert_awaited_once()
+    heartbeat_scheduler.stop.assert_called_once()
     assert call_order == [
         "relay_start",
         "gauge_stop",
         "cleanup_stop",
         "watchdog_stop",
+        "heartbeat_stop",
         "relay_stop",
     ]
+
+
+def test_relay_enabled_skips_heartbeat_when_disabled(
+    monkeypatch: pytest.MonkeyPatch, relay_env: None
+) -> None:
+    monkeypatch.setenv("RELAY_ENABLED", "true")
+    monkeypatch.setenv("HEARTBEAT_ENABLED", "false")
+
+    telegram_client = MagicMock(spec=TelegramClient)
+    telegram_client.__aenter__ = AsyncMock(return_value=telegram_client)
+    telegram_client.__aexit__ = AsyncMock(return_value=None)
+
+    relay = MagicMock(spec=SmsRelay)
+    relay.telegram_client = telegram_client
+    relay.start = AsyncMock()
+    relay.stop = AsyncMock()
+
+    gauge_updater = _make_gauge_updater()
+    watchdog = _make_watchdog()
+    cleanup_scheduler = _make_cleanup_scheduler()
+
+    fake_build_relay = MagicMock(
+        return_value=(relay, gauge_updater, watchdog, cleanup_scheduler, None)
+    )
+    monkeypatch.setattr(app_module, "build_relay", fake_build_relay)
+
+    app = app_module.create_app()
+    with TestClient(app) as client:
+        assert app.state.heartbeat_scheduler is None
+        assert app.state.heartbeat_task is None
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    relay.start.assert_awaited_once()
+    relay.stop.assert_awaited_once()
 
 
 def test_relay_enabled_missing_credentials_raises(
@@ -140,11 +196,14 @@ def test_relay_start_failure_releases_telegram_client(
     gauge_updater = _make_gauge_updater()
     watchdog = _make_watchdog()
     cleanup_scheduler = _make_cleanup_scheduler()
+    heartbeat_scheduler = _make_heartbeat_scheduler()
 
     monkeypatch.setattr(
         app_module,
         "build_relay",
-        MagicMock(return_value=(relay, gauge_updater, watchdog, cleanup_scheduler)),
+        MagicMock(
+            return_value=(relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler)
+        ),
     )
 
     app = app_module.create_app()
@@ -160,6 +219,8 @@ def test_relay_start_failure_releases_telegram_client(
     cleanup_scheduler.stop.assert_not_called()
     watchdog.run.assert_not_awaited()
     watchdog.stop.assert_not_called()
+    heartbeat_scheduler.run.assert_not_awaited()
+    heartbeat_scheduler.stop.assert_not_called()
 
 
 def test_relay_shutdown_cancels_gauge_task_on_timeout(
@@ -188,11 +249,14 @@ def test_relay_shutdown_cancels_gauge_task_on_timeout(
 
     watchdog = _make_watchdog()
     cleanup_scheduler = _make_cleanup_scheduler()
+    heartbeat_scheduler = _make_heartbeat_scheduler()
 
     monkeypatch.setattr(
         app_module,
         "build_relay",
-        MagicMock(return_value=(relay, gauge_updater, watchdog, cleanup_scheduler)),
+        MagicMock(
+            return_value=(relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler)
+        ),
     )
 
     app = app_module.create_app()
@@ -202,6 +266,7 @@ def test_relay_shutdown_cancels_gauge_task_on_timeout(
     gauge_updater.stop.assert_called_once()
     cleanup_scheduler.stop.assert_called_once()
     watchdog.stop.assert_called_once()
+    heartbeat_scheduler.stop.assert_called_once()
     relay.stop.assert_awaited_once()
 
 
@@ -230,11 +295,14 @@ def test_relay_shutdown_cancels_cleanup_task_on_timeout(
     cleanup_scheduler = MagicMock(spec=CleanupScheduler)
     cleanup_scheduler.run = AsyncMock(side_effect=never_stops)
     cleanup_scheduler.stop = MagicMock()
+    heartbeat_scheduler = _make_heartbeat_scheduler()
 
     monkeypatch.setattr(
         app_module,
         "build_relay",
-        MagicMock(return_value=(relay, gauge_updater, watchdog, cleanup_scheduler)),
+        MagicMock(
+            return_value=(relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler)
+        ),
     )
 
     app = app_module.create_app()
@@ -243,6 +311,7 @@ def test_relay_shutdown_cancels_cleanup_task_on_timeout(
 
     cleanup_scheduler.stop.assert_called_once()
     watchdog.stop.assert_called_once()
+    heartbeat_scheduler.stop.assert_called_once()
     relay.stop.assert_awaited_once()
 
 
@@ -271,11 +340,14 @@ def test_relay_shutdown_cancels_watchdog_task_on_timeout(
     watchdog.run = AsyncMock(side_effect=never_stops)
     watchdog.stop = MagicMock()
     cleanup_scheduler = _make_cleanup_scheduler()
+    heartbeat_scheduler = _make_heartbeat_scheduler()
 
     monkeypatch.setattr(
         app_module,
         "build_relay",
-        MagicMock(return_value=(relay, gauge_updater, watchdog, cleanup_scheduler)),
+        MagicMock(
+            return_value=(relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler)
+        ),
     )
 
     app = app_module.create_app()
@@ -284,6 +356,50 @@ def test_relay_shutdown_cancels_watchdog_task_on_timeout(
 
     watchdog.stop.assert_called_once()
     cleanup_scheduler.stop.assert_called_once()
+    heartbeat_scheduler.stop.assert_called_once()
+    relay.stop.assert_awaited_once()
+
+
+def test_relay_shutdown_cancels_heartbeat_task_on_timeout(
+    monkeypatch: pytest.MonkeyPatch, relay_env: None
+) -> None:
+    import asyncio as _asyncio
+
+    monkeypatch.setenv("RELAY_ENABLED", "true")
+    monkeypatch.setattr(app_module, "HEARTBEAT_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
+
+    telegram_client = MagicMock(spec=TelegramClient)
+    telegram_client.__aenter__ = AsyncMock(return_value=telegram_client)
+    telegram_client.__aexit__ = AsyncMock(return_value=None)
+
+    relay = MagicMock(spec=SmsRelay)
+    relay.telegram_client = telegram_client
+    relay.start = AsyncMock()
+    relay.stop = AsyncMock()
+
+    async def never_stops() -> None:
+        await _asyncio.Event().wait()
+
+    gauge_updater = _make_gauge_updater()
+    watchdog = _make_watchdog()
+    cleanup_scheduler = _make_cleanup_scheduler()
+    heartbeat_scheduler = MagicMock(spec=HeartbeatScheduler)
+    heartbeat_scheduler.run = AsyncMock(side_effect=never_stops)
+    heartbeat_scheduler.stop = MagicMock()
+
+    monkeypatch.setattr(
+        app_module,
+        "build_relay",
+        MagicMock(
+            return_value=(relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler)
+        ),
+    )
+
+    app = app_module.create_app()
+    with TestClient(app):
+        pass
+
+    heartbeat_scheduler.stop.assert_called_once()
     relay.stop.assert_awaited_once()
 
 
@@ -329,11 +445,14 @@ def test_state_endpoint_returns_relay_state_when_enabled(
     gauge_updater = _make_gauge_updater()
     watchdog = _make_watchdog()
     cleanup_scheduler = _make_cleanup_scheduler()
+    heartbeat_scheduler = _make_heartbeat_scheduler()
 
     monkeypatch.setattr(
         app_module,
         "build_relay",
-        MagicMock(return_value=(relay, gauge_updater, watchdog, cleanup_scheduler)),
+        MagicMock(
+            return_value=(relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler)
+        ),
     )
 
     app = app_module.create_app()

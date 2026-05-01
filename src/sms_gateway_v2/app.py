@@ -18,6 +18,7 @@ router = APIRouter()
 GAUGE_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 WATCHDOG_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 CLEANUP_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
+HEARTBEAT_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 
 @router.get("/healthz")
@@ -76,7 +77,9 @@ async def state_endpoint(request: Request) -> JSONResponse:
 
 
 async def _startup_relay(app: FastAPI, settings: Settings, metrics: MetricsRegistry) -> None:
-    relay, gauge_updater, watchdog, cleanup_scheduler = build_relay(settings, metrics)
+    relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler = build_relay(
+        settings, metrics
+    )
     telegram_client = relay.telegram_client
     await telegram_client.__aenter__()
     try:
@@ -87,6 +90,9 @@ async def _startup_relay(app: FastAPI, settings: Settings, metrics: MetricsRegis
     gauge_task = asyncio.create_task(gauge_updater.run())
     cleanup_task = asyncio.create_task(cleanup_scheduler.run())
     watchdog_task = asyncio.create_task(watchdog.run())
+    heartbeat_task: asyncio.Task[None] | None = None
+    if heartbeat_scheduler is not None:
+        heartbeat_task = asyncio.create_task(heartbeat_scheduler.run())
     app.state.relay = relay
     app.state.telegram_client = telegram_client
     app.state.gauge_updater = gauge_updater
@@ -95,6 +101,8 @@ async def _startup_relay(app: FastAPI, settings: Settings, metrics: MetricsRegis
     app.state.cleanup_task = cleanup_task
     app.state.watchdog = watchdog
     app.state.watchdog_task = watchdog_task
+    app.state.heartbeat_scheduler = heartbeat_scheduler
+    app.state.heartbeat_task = heartbeat_task
 
 
 async def _shutdown_relay(app: FastAPI) -> None:
@@ -106,6 +114,8 @@ async def _shutdown_relay(app: FastAPI) -> None:
     cleanup_task = app.state.cleanup_task
     watchdog = app.state.watchdog
     watchdog_task = app.state.watchdog_task
+    heartbeat_scheduler = app.state.heartbeat_scheduler
+    heartbeat_task = app.state.heartbeat_task
     gauge_updater.stop()
     try:
         await asyncio.wait_for(gauge_task, timeout=GAUGE_TASK_SHUTDOWN_TIMEOUT_SECONDS)
@@ -127,6 +137,14 @@ async def _shutdown_relay(app: FastAPI) -> None:
         watchdog_task.cancel()
         with suppress(asyncio.CancelledError, Exception):
             await watchdog_task
+    if heartbeat_scheduler is not None and heartbeat_task is not None:
+        heartbeat_scheduler.stop()
+        try:
+            await asyncio.wait_for(heartbeat_task, timeout=HEARTBEAT_TASK_SHUTDOWN_TIMEOUT_SECONDS)
+        except TimeoutError:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await heartbeat_task
     try:
         await relay.stop()
     finally:

@@ -9,6 +9,7 @@ from sms_gateway_v2.worker import DeliveryWorker
 
 from .cleanup_scheduler import CleanupScheduler
 from .exceptions import RelayError
+from .heartbeat import HeartbeatScheduler
 from .relay import SmsRelay
 from .watchdog import ModemWatchdog
 
@@ -16,7 +17,13 @@ from .watchdog import ModemWatchdog
 def build_relay(
     settings: Settings,
     metrics: MetricsRegistry,
-) -> tuple[SmsRelay, QueueGaugeUpdater, ModemWatchdog, CleanupScheduler]:
+) -> tuple[
+    SmsRelay,
+    QueueGaugeUpdater,
+    ModemWatchdog,
+    CleanupScheduler,
+    HeartbeatScheduler | None,
+]:
     if settings.telegram_bot_token == "":
         raise RelayError("telegram_bot_token must not be empty when relay_enabled is true")
     if settings.telegram_chat_id == "":
@@ -66,4 +73,17 @@ def build_relay(
         failed_retention_days=settings.queue_failed_retention_days,
         interval_seconds=settings.cleanup_interval_seconds,
     )
-    return relay, gauge_updater, watchdog, cleanup_scheduler
+    heartbeat_scheduler: HeartbeatScheduler | None = None
+    if settings.heartbeat_enabled:
+        heartbeat_chat_id = (
+            settings.heartbeat_telegram_chat_id
+            if settings.heartbeat_telegram_chat_id != ""
+            else settings.telegram_chat_id
+        )
+        heartbeat_scheduler = HeartbeatScheduler(
+            telegram_client=telegram_client,
+            relay=relay,
+            chat_id=heartbeat_chat_id,
+            interval_seconds=settings.heartbeat_interval_seconds,
+        )
+    return relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler
