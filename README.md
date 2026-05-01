@@ -8,7 +8,7 @@ survival during long periods of inactivity.
 
 ## Status
 
-Sprint 5b of 8: SmsRelay orchestrator.
+Sprint 5c of 8: FastAPI lifespan integration.
 
 ## Hardware Target
 
