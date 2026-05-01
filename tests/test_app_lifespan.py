@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 from sms_gateway_v2 import app as app_module
 from sms_gateway_v2.metrics import QueueGaugeUpdater
 from sms_gateway_v2.relay import CleanupScheduler, ModemWatchdog, RelayError, SmsRelay
+from sms_gateway_v2.relay.models import RelayState
 from sms_gateway_v2.telegram import TelegramClient
 
 
@@ -283,3 +285,68 @@ def test_relay_shutdown_cancels_watchdog_task_on_timeout(
     watchdog.stop.assert_called_once()
     cleanup_scheduler.stop.assert_called_once()
     relay.stop.assert_awaited_once()
+
+
+def test_state_endpoint_returns_503_when_relay_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RELAY_ENABLED", "false")
+
+    app = app_module.create_app()
+    with TestClient(app) as client:
+        response = client.get("/state")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "relay is not enabled"}
+
+
+def test_state_endpoint_returns_relay_state_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, relay_env: None
+) -> None:
+    monkeypatch.setenv("RELAY_ENABLED", "true")
+
+    telegram_client = MagicMock(spec=TelegramClient)
+    telegram_client.__aenter__ = AsyncMock(return_value=telegram_client)
+    telegram_client.__aexit__ = AsyncMock(return_value=None)
+
+    started_at = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
+    last_sms_received_at = datetime(2026, 5, 1, 12, 30, 45, tzinfo=UTC)
+    relay_state = RelayState(
+        status="running",
+        started_at=started_at,
+        last_sms_received_at=last_sms_received_at,
+        last_error=None,
+    )
+
+    relay = MagicMock(spec=SmsRelay)
+    relay.telegram_client = telegram_client
+    relay.start = AsyncMock()
+    relay.stop = AsyncMock()
+    relay.state = MagicMock(return_value=relay_state)
+
+    gauge_updater = _make_gauge_updater()
+    watchdog = _make_watchdog()
+    cleanup_scheduler = _make_cleanup_scheduler()
+
+    monkeypatch.setattr(
+        app_module,
+        "build_relay",
+        MagicMock(return_value=(relay, gauge_updater, watchdog, cleanup_scheduler)),
+    )
+
+    app = app_module.create_app()
+    with TestClient(app) as client:
+        response = client.get("/state")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "status": "running",
+        "started_at": "2026-05-01T12:00:00Z",
+        "last_sms_received_at": "2026-05-01T12:30:45Z",
+        "last_error": None,
+    }
+    assert isinstance(body["started_at"], str)
+    assert isinstance(body["last_sms_received_at"], str)

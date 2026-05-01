@@ -5,8 +5,8 @@ import textwrap
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import APIRouter, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from sms_gateway_v2 import __version__
 from sms_gateway_v2.config import Settings, get_settings
@@ -63,8 +63,16 @@ def create_app() -> FastAPI:
     app.state.settings = settings
     app.state.metrics = metrics
     app.add_api_route(settings.metrics_path, metrics_endpoint, methods=["GET"])
+    app.add_api_route("/state", state_endpoint, methods=["GET"])
     app.include_router(router)
     return app
+
+
+async def state_endpoint(request: Request) -> JSONResponse:
+    relay = getattr(request.app.state, "relay", None)
+    if relay is None:
+        return JSONResponse({"detail": "relay is not enabled"}, status_code=503)
+    return JSONResponse(relay.state().model_dump(mode="json"))
 
 
 async def _startup_relay(app: FastAPI, settings: Settings, metrics: MetricsRegistry) -> None:
