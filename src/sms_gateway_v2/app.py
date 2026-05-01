@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import textwrap
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import HTMLResponse
@@ -13,6 +14,8 @@ from sms_gateway_v2.metrics import MetricsRegistry, metrics_endpoint
 from sms_gateway_v2.relay import build_relay
 
 router = APIRouter()
+
+GAUGE_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 
 @router.get("/healthz")
@@ -63,7 +66,7 @@ def create_app() -> FastAPI:
 
 
 async def _startup_relay(app: FastAPI, settings: Settings, metrics: MetricsRegistry) -> None:
-    relay = build_relay(settings, metrics)
+    relay, gauge_updater = build_relay(settings, metrics)
     telegram_client = relay.telegram_client
     await telegram_client.__aenter__()
     try:
@@ -71,13 +74,25 @@ async def _startup_relay(app: FastAPI, settings: Settings, metrics: MetricsRegis
     except BaseException:
         await telegram_client.__aexit__(None, None, None)
         raise
+    gauge_task = asyncio.create_task(gauge_updater.run())
     app.state.relay = relay
     app.state.telegram_client = telegram_client
+    app.state.gauge_updater = gauge_updater
+    app.state.gauge_task = gauge_task
 
 
 async def _shutdown_relay(app: FastAPI) -> None:
     relay = app.state.relay
     telegram_client = app.state.telegram_client
+    gauge_updater = app.state.gauge_updater
+    gauge_task = app.state.gauge_task
+    gauge_updater.stop()
+    try:
+        await asyncio.wait_for(gauge_task, timeout=GAUGE_TASK_SHUTDOWN_TIMEOUT_SECONDS)
+    except TimeoutError:
+        gauge_task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await gauge_task
     try:
         await relay.stop()
     finally:

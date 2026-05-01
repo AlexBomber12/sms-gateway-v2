@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sms_gateway_v2.metrics.endpoint import metrics_endpoint
+from sms_gateway_v2.metrics.gauge_updater import QueueGaugeUpdater
 from sms_gateway_v2.metrics.registry import (
     MetricsRegistry,
     last_sms_received_seconds,
@@ -23,6 +24,7 @@ from sms_gateway_v2.metrics.registry import (
 
 __all__ = [
     "MetricsRegistry",
+    "QueueGaugeUpdater",
     "last_sms_received_seconds",
     "last_telegram_success_seconds",
     "metrics_endpoint",

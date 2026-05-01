@@ -393,6 +393,9 @@ class Queue:
             )
             return count
 
+    def state_dirs(self) -> dict[str, Path]:
+        return dict(self._dirs_or_raise())
+
     def _content_hash_for_item(self, item: QueueItem) -> str:
         if item.content_hash is not None:
             return item.content_hash
