@@ -8,7 +8,7 @@ survival during long periods of inactivity.
 
 ## Status
 
-Sprint 6 of 8: Docker deployment artifacts.
+Sprint 8 of 8: production cutover documented.
 
 ## Hardware Target
 
@@ -47,6 +47,12 @@ For production deployment on the NAS host with Docker Compose, see
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
 ```
+
+## Production deployment
+
+For the one-time cutover from the legacy AI-Server gammu relay to
+this stack, follow the runbook in
+[`docs/migration-from-v1.md`](docs/migration-from-v1.md).
 
 ## Project Layout
 
@@ -98,7 +104,7 @@ docker compose -f deploy/docker-compose.yml up -d
 2. [x] ModemManager D-Bus client with mocked tests.
 3. [x] Durable file queue and SQLite deduplication.
 4. [x] Telegram client and Prometheus metrics.
-5. [ ] Delivery worker (5a done, 5b in progress, 5c pending FastAPI lifespan).
-6. [ ] Dockerfile and deploy compose.
-7. [ ] Active modem healthcheck and dead-man heartbeat.
-8. [ ] Production cutover from AI-Server.
+5. [x] Delivery worker.
+6. [x] Dockerfile and deploy compose.
+7. [x] Active modem healthcheck and dead-man heartbeat.
+8. [x] Production cutover from AI-Server.
