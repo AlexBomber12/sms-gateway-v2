@@ -132,12 +132,19 @@ def _read_gammu_sqlite(
 def _read_csv(path: Path, *, source_timezone: tzinfo | None) -> Iterator[GammuMessage]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        required = {"number", "text", "timestamp"}
-        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+        required = ("number", "text", "timestamp")
+        if reader.fieldnames is None or not set(required).issubset(reader.fieldnames):
             raise ValueError(
-                f"CSV must have header columns {sorted(required)}; got {reader.fieldnames!r}"
+                f"CSV must have header columns {list(required)}; got {reader.fieldnames!r}"
             )
         for row in reader:
+            # csv.DictReader silently fills missing trailing columns with None;
+            # surface those as a ValueError instead of letting None reach _parse_timestamp.
+            missing = [name for name in required if row.get(name) is None]
+            if missing:
+                raise ValueError(
+                    f"CSV row {reader.line_num} is missing required field(s) {missing}: {row!r}"
+                )
             yield GammuMessage(
                 number=row["number"],
                 text=row["text"],
