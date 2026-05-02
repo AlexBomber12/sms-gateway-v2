@@ -80,7 +80,6 @@ From the repository root on the NAS host:
 ```bash
 cp .env.example deploy/.env
 # Edit deploy/.env and set at least:
-#   HOST=0.0.0.0
 #   RELAY_ENABLED=true
 #   TELEGRAM_BOT_TOKEN=<bot token from BotFather>
 #   TELEGRAM_CHAT_ID=<numeric chat id, can be negative for groups>
@@ -88,12 +87,11 @@ cp .env.example deploy/.env
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-`.env.example` ships with `HOST=127.0.0.1` for local development. The compose
-file loads `deploy/.env` via `env_file`, which overrides the image's
-`HOST=0.0.0.0` default — leaving Uvicorn bound to the container's loopback so
-the published `127.0.0.1:8091:8091` port is unreachable from the host. Set
-`HOST=0.0.0.0` in `deploy/.env` (or delete the `HOST=` line entirely so the
-image default applies) before bringing the stack up.
+`HOST` can be left unset (or set to any value) in `deploy/.env` — the compose
+file pins `HOST=0.0.0.0` at the service level via `environment:`, which takes
+precedence over `env_file:` and the image default. Uvicorn always binds to
+`0.0.0.0` inside the container; the published `127.0.0.1:8091:8091` mapping
+keeps the port reachable from the host only.
 
 The image is pulled from `ghcr.io/alexbomber12/sms-gateway-v2:latest`. On
 first start the named volume `sms-gateway-state` is created under

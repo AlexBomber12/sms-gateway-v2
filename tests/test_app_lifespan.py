@@ -229,7 +229,7 @@ def test_relay_shutdown_cancels_gauge_task_on_timeout(
     import asyncio as _asyncio
 
     monkeypatch.setenv("RELAY_ENABLED", "true")
-    monkeypatch.setattr(app_module, "GAUGE_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(app_module, "BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
 
     telegram_client = MagicMock(spec=TelegramClient)
     telegram_client.__aenter__ = AsyncMock(return_value=telegram_client)
@@ -276,7 +276,7 @@ def test_relay_shutdown_cancels_cleanup_task_on_timeout(
     import asyncio as _asyncio
 
     monkeypatch.setenv("RELAY_ENABLED", "true")
-    monkeypatch.setattr(app_module, "CLEANUP_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(app_module, "BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
 
     telegram_client = MagicMock(spec=TelegramClient)
     telegram_client.__aenter__ = AsyncMock(return_value=telegram_client)
@@ -321,7 +321,7 @@ def test_relay_shutdown_cancels_watchdog_task_on_timeout(
     import asyncio as _asyncio
 
     monkeypatch.setenv("RELAY_ENABLED", "true")
-    monkeypatch.setattr(app_module, "WATCHDOG_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(app_module, "BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
 
     telegram_client = MagicMock(spec=TelegramClient)
     telegram_client.__aenter__ = AsyncMock(return_value=telegram_client)
@@ -366,7 +366,7 @@ def test_relay_shutdown_cancels_heartbeat_task_on_timeout(
     import asyncio as _asyncio
 
     monkeypatch.setenv("RELAY_ENABLED", "true")
-    monkeypatch.setattr(app_module, "HEARTBEAT_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(app_module, "BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
 
     telegram_client = MagicMock(spec=TelegramClient)
     telegram_client.__aenter__ = AsyncMock(return_value=telegram_client)
