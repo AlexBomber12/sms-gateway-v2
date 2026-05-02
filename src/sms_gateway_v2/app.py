@@ -26,8 +26,10 @@ class SupportsStop(Protocol):
 async def _stop_background_task(
     scheduler: SupportsStop,
     task: asyncio.Task[None],
-    timeout: float = BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECONDS,
+    timeout: float | None = None,
 ) -> None:
+    if timeout is None:
+        timeout = BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECONDS
     scheduler.stop()
     try:
         await asyncio.wait_for(task, timeout=timeout)
