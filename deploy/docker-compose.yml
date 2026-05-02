@@ -7,14 +7,12 @@
 #     is a member of that group. See docs/deploy.md for the exact rule
 #     and the alternative of running the container as root.
 #   - A .env file lives next to this compose file with at least:
-#       HOST=0.0.0.0
 #       RELAY_ENABLED=true
 #       TELEGRAM_BOT_TOKEN=...
 #       TELEGRAM_CHAT_ID=...
-#     The repo-root .env.example defaults HOST=127.0.0.1 for local dev; in this
-#     env_file it would override the image's HOST=0.0.0.0 and bind Uvicorn to
-#     the container's loopback, so set HOST=0.0.0.0 (or omit the line) here.
 #     See .env.example at the repo root for the full set of supported variables.
+#     HOST is pinned to 0.0.0.0 at the service level below; any HOST value in
+#     deploy/.env is ignored.
 #
 # The published port is bound to 127.0.0.1 only; this service trusts the LAN
 # perimeter and is not meant to be reachable from outside the host.
@@ -26,6 +24,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      HOST: "0.0.0.0"
     ports:
       - "127.0.0.1:8091:8091"
     volumes:

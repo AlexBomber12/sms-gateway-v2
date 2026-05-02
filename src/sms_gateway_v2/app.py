@@ -4,6 +4,7 @@ import asyncio
 import textwrap
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from typing import Protocol
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -15,10 +16,25 @@ from sms_gateway_v2.relay import build_relay
 
 router = APIRouter()
 
-GAUGE_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
-WATCHDOG_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
-CLEANUP_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
-HEARTBEAT_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
+BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECONDS = 2.0
+
+
+class SupportsStop(Protocol):
+    def stop(self) -> None: ...
+
+
+async def _stop_background_task(
+    scheduler: SupportsStop,
+    task: asyncio.Task[None],
+    timeout: float = BACKGROUND_TASK_SHUTDOWN_TIMEOUT_SECONDS,
+) -> None:
+    scheduler.stop()
+    try:
+        await asyncio.wait_for(task, timeout=timeout)
+    except TimeoutError:
+        task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await task
 
 
 @router.get("/healthz")
@@ -108,43 +124,13 @@ async def _startup_relay(app: FastAPI, settings: Settings, metrics: MetricsRegis
 async def _shutdown_relay(app: FastAPI) -> None:
     relay = app.state.relay
     telegram_client = app.state.telegram_client
-    gauge_updater = app.state.gauge_updater
-    gauge_task = app.state.gauge_task
-    cleanup_scheduler = app.state.cleanup_scheduler
-    cleanup_task = app.state.cleanup_task
-    watchdog = app.state.watchdog
-    watchdog_task = app.state.watchdog_task
     heartbeat_scheduler = app.state.heartbeat_scheduler
     heartbeat_task = app.state.heartbeat_task
-    gauge_updater.stop()
-    try:
-        await asyncio.wait_for(gauge_task, timeout=GAUGE_TASK_SHUTDOWN_TIMEOUT_SECONDS)
-    except TimeoutError:
-        gauge_task.cancel()
-        with suppress(asyncio.CancelledError, Exception):
-            await gauge_task
-    cleanup_scheduler.stop()
-    try:
-        await asyncio.wait_for(cleanup_task, timeout=CLEANUP_TASK_SHUTDOWN_TIMEOUT_SECONDS)
-    except TimeoutError:
-        cleanup_task.cancel()
-        with suppress(asyncio.CancelledError, Exception):
-            await cleanup_task
-    watchdog.stop()
-    try:
-        await asyncio.wait_for(watchdog_task, timeout=WATCHDOG_TASK_SHUTDOWN_TIMEOUT_SECONDS)
-    except TimeoutError:
-        watchdog_task.cancel()
-        with suppress(asyncio.CancelledError, Exception):
-            await watchdog_task
+    await _stop_background_task(app.state.gauge_updater, app.state.gauge_task)
+    await _stop_background_task(app.state.cleanup_scheduler, app.state.cleanup_task)
+    await _stop_background_task(app.state.watchdog, app.state.watchdog_task)
     if heartbeat_scheduler is not None and heartbeat_task is not None:
-        heartbeat_scheduler.stop()
-        try:
-            await asyncio.wait_for(heartbeat_task, timeout=HEARTBEAT_TASK_SHUTDOWN_TIMEOUT_SECONDS)
-        except TimeoutError:
-            heartbeat_task.cancel()
-            with suppress(asyncio.CancelledError, Exception):
-                await heartbeat_task
+        await _stop_background_task(heartbeat_scheduler, heartbeat_task)
     try:
         await relay.stop()
     finally:

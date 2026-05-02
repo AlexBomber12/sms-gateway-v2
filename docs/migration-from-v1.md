@@ -30,10 +30,10 @@ serving production. They confirm v2 is ready before the SIM is moved.
    ```bash
    cp .env.example deploy/.env
    # Edit deploy/.env:
-   #   HOST=0.0.0.0
    #   RELAY_ENABLED=false
    #   TELEGRAM_BOT_TOKEN=<bot token>
    #   TELEGRAM_CHAT_ID=<numeric chat id>
+   # HOST may be left unset; the compose file pins HOST=0.0.0.0 at the service level.
    docker compose -f deploy/docker-compose.yml up -d
    curl -s http://127.0.0.1:8091/healthz
    curl -s http://127.0.0.1:8091/metrics | head
