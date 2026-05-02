@@ -62,11 +62,22 @@ def _content_hash(message: GammuMessage, *, dedup_window_minutes: int) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _normalize_timestamp_offset(value: str) -> str:
+    # Mirror src/sms_gateway_v2/modem/client.py::_normalize_timestamp_offset so a
+    # CSV exported with the common `+HHMM` (no colon) offset parses identically
+    # whether it came from a gammu dump or from ModemManager.
+    if len(value) >= 5 and value[-5] in {"+", "-"}:
+        offset = value[-4:]
+        if offset.isdecimal():
+            return f"{value[:-5]}{value[-5]}{offset[:2]}:{offset[2:]}"
+    return value
+
+
 def _parse_timestamp(raw: str, *, source_timezone: tzinfo | None) -> datetime:
     text = raw.strip()
     if not text:
         raise ValueError("empty timestamp")
-    candidate = text.replace("Z", "+00:00")
+    candidate = _normalize_timestamp_offset(text.replace("Z", "+00:00"))
     try:
         parsed = datetime.fromisoformat(candidate)
     except ValueError:
@@ -279,7 +290,10 @@ def main(argv: list[str] | None = None) -> int:
             messages,
             dedup_window_minutes=args.dedup_window_minutes,
         )
-    except ValueError as exc:
+    except (ValueError, sqlite3.Error) as exc:
+        # sqlite3.Error covers OperationalError (e.g. wrong --gammu-table) and
+        # any DB-level failure on either the source or the target db; surface
+        # them as a controlled CLI error rather than a traceback.
         print(str(exc), file=sys.stderr)
         return 2
     print(f"rows_read={rows_read} inserted={inserted} duplicates_skipped={duplicates}")
