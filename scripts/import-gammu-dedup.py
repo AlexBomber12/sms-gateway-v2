@@ -36,8 +36,9 @@ import sys
 import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, tzinfo
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # DEDUP HASH FORMULA: keep this in sync with
 # src/sms_gateway_v2/queue/queue.py::Queue._content_hash. Any change to
@@ -61,7 +62,7 @@ def _content_hash(message: GammuMessage, *, dedup_window_minutes: int) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _parse_timestamp(raw: str) -> datetime:
+def _parse_timestamp(raw: str, *, source_timezone: tzinfo | None) -> datetime:
     text = raw.strip()
     if not text:
         raise ValueError("empty timestamp")
@@ -79,18 +80,28 @@ def _parse_timestamp(raw: str) -> datetime:
             raise ValueError(f"unrecognised timestamp format: {raw!r}") from None
     if parsed.tzinfo is None:
         # Gammu's default SQLite schema stores ReceivingDateTime as a naive
-        # local wall-clock value. Tagging it as UTC would shift its epoch by
-        # the local offset and produce a different bucket than the runtime
-        # Queue._content_hash computes once ModemManager redelivers the same
-        # SMS with a real timezone offset. datetime.astimezone() with no
-        # argument interprets a naive value as system local time and returns
-        # an aware datetime in that same zone — matching the modem's report
-        # when both run on the same host (or with the same TZ env).
-        parsed = parsed.astimezone()
+        # local wall-clock value in the legacy host's zone. The dedup bucket
+        # produced from this timestamp must match what the runtime relay
+        # computes once ModemManager redelivers the same SMS with the PDU's
+        # real offset, so the operator MUST supply the legacy host's zone
+        # explicitly — relying on the importer host's local TZ silently
+        # diverges when the gammu DB is copied across machines.
+        if source_timezone is None:
+            raise ValueError(
+                "naive timestamp encountered but --source-timezone was not "
+                "provided; pass the IANA zone of the host that wrote the "
+                "gammu DB (e.g. --source-timezone Europe/Rome)"
+            )
+        parsed = parsed.replace(tzinfo=source_timezone)
     return parsed
 
 
-def _read_gammu_sqlite(path: Path, *, table: str) -> Iterator[GammuMessage]:
+def _read_gammu_sqlite(
+    path: Path,
+    *,
+    table: str,
+    source_timezone: tzinfo | None,
+) -> Iterator[GammuMessage]:
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
         connection.row_factory = sqlite3.Row
         cursor = connection.execute(f"SELECT Number, TextDecoded, ReceivingDateTime FROM {table}")
@@ -103,11 +114,11 @@ def _read_gammu_sqlite(path: Path, *, table: str) -> Iterator[GammuMessage]:
             yield GammuMessage(
                 number=str(number),
                 text=str(text),
-                timestamp=_parse_timestamp(str(timestamp_raw)),
+                timestamp=_parse_timestamp(str(timestamp_raw), source_timezone=source_timezone),
             )
 
 
-def _read_csv(path: Path) -> Iterator[GammuMessage]:
+def _read_csv(path: Path, *, source_timezone: tzinfo | None) -> Iterator[GammuMessage]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         required = {"number", "text", "timestamp"}
@@ -119,7 +130,7 @@ def _read_csv(path: Path) -> Iterator[GammuMessage]:
             yield GammuMessage(
                 number=row["number"],
                 text=row["text"],
-                timestamp=_parse_timestamp(row["timestamp"]),
+                timestamp=_parse_timestamp(row["timestamp"], source_timezone=source_timezone),
             )
 
 
@@ -215,7 +226,27 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Bucket size used by the relay (must match Settings.dedup_window_minutes; default: 1)."
         ),
     )
+    parser.add_argument(
+        "--source-timezone",
+        default=None,
+        help=(
+            "IANA zone (e.g. 'Europe/Rome') of the host that wrote the gammu DB. "
+            "Required when timestamps are naive — gammu's default SQLite schema "
+            "stores ReceivingDateTime as a naive wall-clock value, and the legacy "
+            "host's zone may differ from the importer host's, so the zone must be "
+            "specified explicitly to produce dedup hashes that match the relay."
+        ),
+    )
     return parser
+
+
+def _resolve_source_timezone(name: str | None) -> tzinfo | None:
+    if name is None:
+        return None
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"unknown IANA timezone: {name!r}") from exc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -223,21 +254,34 @@ def main(argv: list[str] | None = None) -> int:
     if args.dedup_window_minutes < 1:
         print("--dedup-window-minutes must be >= 1", file=sys.stderr)
         return 2
+    try:
+        source_timezone = _resolve_source_timezone(args.source_timezone)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if args.gammu_db is not None:
         if not args.gammu_db.exists():
             print(f"gammu db not found: {args.gammu_db}", file=sys.stderr)
             return 2
-        messages = _read_gammu_sqlite(args.gammu_db, table=args.gammu_table)
+        messages = _read_gammu_sqlite(
+            args.gammu_db,
+            table=args.gammu_table,
+            source_timezone=source_timezone,
+        )
     else:
         if not args.csv.exists():
             print(f"csv file not found: {args.csv}", file=sys.stderr)
             return 2
-        messages = _read_csv(args.csv)
-    rows_read, inserted, duplicates = _insert_hashes(
-        args.target_db,
-        messages,
-        dedup_window_minutes=args.dedup_window_minutes,
-    )
+        messages = _read_csv(args.csv, source_timezone=source_timezone)
+    try:
+        rows_read, inserted, duplicates = _insert_hashes(
+            args.target_db,
+            messages,
+            dedup_window_minutes=args.dedup_window_minutes,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     print(f"rows_read={rows_read} inserted={inserted} duplicates_skipped={duplicates}")
     return 0
 

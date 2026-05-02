@@ -58,18 +58,27 @@ serving production. They confirm v2 is ready before the SIM is moved.
    test alternative" at the bottom of this document).
 4. **Pre-populate the dedup database.** Copy the gammu inbox database
    off AI-Server and run the importer so v2 already knows about
-   messages the legacy relay forwarded recently:
+   messages the legacy relay forwarded recently. The `--source-timezone`
+   flag is the IANA zone of AI-Server (the host that wrote the gammu
+   DB) — gammu stores `ReceivingDateTime` as a naive wall-clock value,
+   so the importer must be told which zone to interpret it in for the
+   resulting dedup hashes to match what the relay computes when
+   ModemManager redelivers the same SMS:
    ```bash
    scp ai-server:/var/spool/gammu/sms.db /tmp/gammu-inbox.db
+   ssh ai-server timedatectl show -p Timezone --value   # confirm AI-Server's zone
    python scripts/import-gammu-dedup.py \
        --gammu-db /tmp/gammu-inbox.db \
-       --target-db ./state/dedup.db
+       --target-db ./state/dedup.db \
+       --source-timezone Europe/Rome
    ```
    The script prints `rows_read=N inserted=M duplicates_skipped=K`.
    `inserted` should match the size of the gammu inbox; `duplicates`
    only means the script was run twice. If your legacy relay uses
    MySQL or a non-standard schema, dump the inbox to CSV with header
-   `number,text,timestamp` and pass `--csv` instead of `--gammu-db`.
+   `number,text,timestamp` and pass `--csv` instead of `--gammu-db`
+   (the same `--source-timezone` rule applies for naive CSV
+   timestamps).
 
 ## Cutover (the actual switchover)
 
