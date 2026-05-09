@@ -47,6 +47,7 @@ def modem_client(added_signal_probe: AddedSignalProbe) -> MagicMock:
     client.disconnect = AsyncMock()
     client.watch_added = AsyncMock(side_effect=added_signal_probe.watch_added)
     client.list_messages = AsyncMock(return_value=[])
+    client.read_message = AsyncMock(return_value=None)
     client.delete_message = AsyncMock()
     return client
 

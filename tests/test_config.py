@@ -24,6 +24,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.delenv("TELEGRAM_MAX_RETRIES", raising=False)
     monkeypatch.delenv("WORKER_RETRY_SCHEDULE_SECONDS", raising=False)
     monkeypatch.delenv("METRICS_PATH", raising=False)
+    monkeypatch.delenv("MODEM_SMS_TEXT_WAIT_TIMEOUT_SECONDS", raising=False)
 
     settings = Settings()
 
@@ -41,6 +42,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.telegram_max_retries == 3
     assert settings.worker_retry_schedule_seconds == (5, 30, 300, 1800, 7200, 21600, 86400)
     assert settings.metrics_path == "/metrics"
+    assert settings.modem_sms_text_wait_timeout_seconds == 5.0
     assert settings.dedup_db_path == Path("./state/dedup.db")
 
 
@@ -63,6 +65,7 @@ def test_settings_env_overrides_defaults(
     monkeypatch.setenv("TELEGRAM_MAX_RETRIES", "5")
     monkeypatch.setenv("WORKER_RETRY_SCHEDULE_SECONDS", "1,2,4")
     monkeypatch.setenv("METRICS_PATH", "/custom-metrics")
+    monkeypatch.setenv("MODEM_SMS_TEXT_WAIT_TIMEOUT_SECONDS", "0.5")
 
     settings = get_settings()
 
@@ -80,6 +83,7 @@ def test_settings_env_overrides_defaults(
     assert settings.telegram_max_retries == 5
     assert settings.worker_retry_schedule_seconds == (1, 2, 4)
     assert settings.metrics_path == "/custom-metrics"
+    assert settings.modem_sms_text_wait_timeout_seconds == 0.5
     assert settings.dedup_db_path == tmp_path / "custom-state" / "dedup.db"
 
 

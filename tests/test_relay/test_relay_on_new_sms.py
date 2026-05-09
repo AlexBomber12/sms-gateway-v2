@@ -33,7 +33,7 @@ async def test_on_new_sms_enqueues_wakes_worker_deletes_and_updates_metrics(
     fire_added_signal: FireAddedSignal,
 ) -> None:
     await register_relay_callback(queue, modem_client, relay)
-    modem_client.list_messages.return_value = [sample_sms]
+    modem_client.read_message.return_value = sample_sms
     queue.enqueue = AsyncMock(wraps=queue.enqueue)
     worker.wakeup = MagicMock(wraps=worker.wakeup)
 
@@ -58,7 +58,7 @@ async def test_on_new_sms_duplicate_increments_dedup_and_still_deletes(
     await register_relay_callback(queue, modem_client, relay)
     assert await queue.enqueue(sample_sms) is not None
     queue.enqueue = AsyncMock(wraps=queue.enqueue)
-    modem_client.list_messages.return_value = [sample_sms]
+    modem_client.read_message.return_value = sample_sms
 
     await fire_added_signal(sample_sms.object_path)
 
@@ -72,8 +72,6 @@ async def test_on_new_sms_logs_and_skips_when_path_not_found(
     relay: SmsRelay,
     modem_client: MagicMock,
     queue: Queue,
-    sample_sms: IncomingSms,
-    sms_factory: SmsFactory,
     fire_added_signal: FireAddedSignal,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -81,9 +79,7 @@ async def test_on_new_sms_logs_and_skips_when_path_not_found(
     monkeypatch.setattr("sms_gateway_v2.relay.relay.logger", logger)
     await register_relay_callback(queue, modem_client, relay)
     missing_path = "/org/freedesktop/ModemManager1/SMS/missing"
-    modem_client.list_messages.return_value = [
-        sms_factory(object_path=sample_sms.object_path, text="other")
-    ]
+    modem_client.read_message.return_value = None
     queue.enqueue = AsyncMock(wraps=queue.enqueue)
 
     await fire_added_signal(missing_path)
@@ -105,7 +101,7 @@ async def test_on_new_sms_logs_delete_failure_without_raising(
     logger = MagicMock()
     monkeypatch.setattr("sms_gateway_v2.relay.relay.logger", logger)
     await register_relay_callback(queue, modem_client, relay)
-    modem_client.list_messages.return_value = [sample_sms]
+    modem_client.read_message.return_value = sample_sms
     modem_client.delete_message.side_effect = MessageDeleteFailed("delete failed")
 
     await fire_added_signal(sample_sms.object_path)
@@ -130,7 +126,7 @@ async def test_on_new_sms_records_unexpected_enqueue_error_without_raising(
     logger = MagicMock()
     monkeypatch.setattr("sms_gateway_v2.relay.relay.logger", logger)
     await register_relay_callback(queue, modem_client, relay)
-    modem_client.list_messages.return_value = [sample_sms]
+    modem_client.read_message.return_value = sample_sms
     queue.enqueue = AsyncMock(side_effect=RuntimeError("boom"))
     worker.wakeup = MagicMock(wraps=worker.wakeup)
 
@@ -160,29 +156,30 @@ async def test_concurrent_on_new_sms_calls_are_serialized(
     )
     first_entered = asyncio.Event()
     release_first = asyncio.Event()
-    list_calls = 0
+    read_calls = 0
 
-    async def list_messages() -> list[IncomingSms]:
-        nonlocal list_calls
-        list_calls += 1
-        if list_calls == 1:
+    async def read_message(sms_path: str) -> IncomingSms:
+        nonlocal read_calls
+        assert sms_path in {first.object_path, second.object_path}
+        read_calls += 1
+        if read_calls == 1:
             first_entered.set()
             await release_first.wait()
-            return [first]
-        return [second]
+            return first
+        return second
 
-    modem_client.list_messages = AsyncMock(side_effect=list_messages)
+    modem_client.read_message = AsyncMock(side_effect=read_message)
 
     first_task = asyncio.create_task(relay._on_new_sms(first.object_path))
     await asyncio.wait_for(first_entered.wait(), timeout=1.0)
     second_task = asyncio.create_task(relay._on_new_sms(second.object_path))
     await asyncio.sleep(0)
 
-    assert list_calls == 1
+    assert read_calls == 1
     assert not second_task.done()
 
     release_first.set()
     await asyncio.gather(first_task, second_task)
 
-    assert list_calls == 2
+    assert read_calls == 2
     assert modem_client.delete_message.await_count == 2

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from datetime import datetime
 from types import MethodType
 from typing import Protocol, TypeVar, cast
@@ -26,6 +27,7 @@ from dbus_fast.errors import (
     SignatureBodyMismatchError,
 )
 
+from sms_gateway_v2.config import get_settings
 from sms_gateway_v2.modem.exceptions import (
     MessageDeleteFailed,
     ModemError,
@@ -39,6 +41,7 @@ logger = structlog.get_logger(__name__)
 MODEM_MANAGER_BUS_NAME = "org.freedesktop.ModemManager1"
 MODEM_MANAGER_OBJECT_PATH = "/org/freedesktop/ModemManager1"
 OBJECT_MANAGER_INTERFACE = "org.freedesktop.DBus.ObjectManager"
+DBUS_PROPERTIES_INTERFACE = "org.freedesktop.DBus.Properties"
 MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
 MODEM_3GPP_INTERFACE = "org.freedesktop.ModemManager1.Modem.Modem3gpp"
 MESSAGING_INTERFACE = "org.freedesktop.ModemManager1.Modem.Messaging"
@@ -95,6 +98,7 @@ ManagedObjects = dict[str, dict[str, object]]
 PropertyValue = TypeVar("PropertyValue")
 AddedCallback = Callable[[str], Awaitable[None]]
 CallbackKey = tuple[str, int, int]
+PropertiesChangedCallback = Callable[[str, dict[str, object], list[str]], None]
 
 
 class ProxyObject(Protocol):
@@ -159,10 +163,17 @@ class SmsInterface(Protocol):
     async def get_pdu_type(self) -> int | str: ...
 
 
+class DBusPropertiesInterface(Protocol):
+    def on_properties_changed(self, callback: PropertiesChangedCallback) -> None: ...
+
+    def off_properties_changed(self, callback: PropertiesChangedCallback) -> None: ...
+
+
 class ModemManagerClient:
-    def __init__(self) -> None:
+    def __init__(self, sms_text_wait_timeout_seconds: float | None = None) -> None:
         self._bus: MessageBus | None = None
         self._modem_path: str | None = None
+        self._sms_text_wait_timeout_seconds = sms_text_wait_timeout_seconds
         self._watch_tasks: set[asyncio.Future[None]] = set()
         self._added_callbacks: dict[CallbackKey, AddedCallback] = {}
         self._added_watch_keys: set[tuple[str, CallbackKey]] = set()
@@ -430,6 +441,45 @@ class ModemManagerClient:
         messages.sort(key=self._message_sort_key)
         return messages
 
+    async def read_message(self, sms_path: str) -> IncomingSms | None:
+        """Read one SMS by path, waiting for delayed Text population after MessageAdded.
+
+        Some modems expose the SMS object and emit MessageAdded before ModemManager's async
+        decoder has populated the Text property. This waits briefly for the Text property
+        change before returning, while still allowing degraded empty-body delivery on timeout.
+        """
+        try:
+            sms = await self._get_sms_interface(sms_path)
+        except ModemManagerUnavailable as exc:
+            if self._is_unknown_object_unavailable(exc):
+                logger.info("message_read_missing", sms_path=sms_path)
+                return None
+            raise
+        pdu_type = self._decode_pdu_type(await self._read_required("PduType", sms.get_pdu_type))
+        if pdu_type not in INBOUND_SMS_PDU_TYPES:
+            logger.info(
+                "message_skipped_non_inbound",
+                sms_path=sms_path,
+                pdu_type=pdu_type,
+            )
+            return None
+
+        text = await self._read_required("Text", sms.get_text)
+        if text == "":
+            text = await self._wait_for_sms_text(sms_path, sms)
+
+        message = IncomingSms(
+            object_path=sms_path,
+            number=await self._read_required("Number", sms.get_number),
+            text=text,
+            timestamp=self._parse_timestamp(
+                await self._read_optional("Timestamp", sms.get_timestamp)
+            ),
+            pdu_type=pdu_type,
+        )
+        logger.info("message_read", sms_path=sms_path)
+        return message
+
     async def delete_message(self, sms_path: str) -> None:
         modem_path = await self._ensure_modem_path()
         modem_path, messaging = await self._get_messaging_interface(modem_path)
@@ -624,6 +674,52 @@ class ModemManagerClient:
             self._get_proxy_interface(proxy, "SMS object", sms_path, SMS_INTERFACE),
         )
 
+    async def _get_dbus_properties_interface(self, object_path: str) -> DBusPropertiesInterface:
+        _, proxy = await self._get_proxy_object("D-Bus properties object", object_path)
+        return cast(
+            DBusPropertiesInterface,
+            self._get_proxy_interface(
+                proxy,
+                "D-Bus properties object",
+                object_path,
+                DBUS_PROPERTIES_INTERFACE,
+            ),
+        )
+
+    async def _wait_for_sms_text(self, sms_path: str, sms: SmsInterface) -> str:
+        timeout_seconds = self._sms_text_wait_timeout_seconds
+        if timeout_seconds is None:
+            timeout_seconds = get_settings().modem_sms_text_wait_timeout_seconds
+        text_changed = asyncio.Event()
+        properties = await self._get_dbus_properties_interface(sms_path)
+
+        def handle_properties_changed(
+            interface_name: str,
+            changed_properties: dict[str, object],
+            _invalidated_properties: list[str],
+        ) -> None:
+            if interface_name == SMS_INTERFACE and "Text" in changed_properties:
+                text_changed.set()
+
+        properties.on_properties_changed(handle_properties_changed)
+        try:
+            text = await self._read_required("Text", sms.get_text)
+            if text != "":
+                return text
+            with suppress(TimeoutError):
+                await asyncio.wait_for(text_changed.wait(), timeout=timeout_seconds)
+        finally:
+            properties.off_properties_changed(handle_properties_changed)
+
+        text = await self._read_required("Text", sms.get_text)
+        if text == "":
+            logger.warning(
+                "sms_text_wait_timeout",
+                sms_path=sms_path,
+                timeout_seconds=timeout_seconds,
+            )
+        return text
+
     async def _get_proxy_object(
         self,
         object_kind: str,
@@ -656,6 +752,9 @@ class ModemManagerClient:
 
     def _is_unknown_object_error(self, exc: BaseException) -> bool:
         return isinstance(exc, DBusError) and exc.type == UNKNOWN_OBJECT_ERROR
+
+    def _is_unknown_object_unavailable(self, exc: ModemManagerUnavailable) -> bool:
+        return exc.__cause__ is not None and self._is_unknown_object_error(exc.__cause__)
 
     def _get_proxy_interface(
         self,

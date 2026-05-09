@@ -85,7 +85,7 @@ async def test_relay_restart_resets_worker_and_processes_new_sms(
 
     await relay.start()
     try:
-        modem_client.list_messages.return_value = [sample_sms]
+        modem_client.read_message.return_value = sample_sms
 
         await fire_added_signal(sample_sms.object_path)
         await wait_until(lambda: bool(list(queue._dirs["sent"].glob("*.json"))))

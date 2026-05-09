@@ -175,7 +175,7 @@ class SmsRelay:
         messages = await self._modem_client.list_messages()
         for message in messages:
             async with self._sms_handler_lock:
-                await self._process_sms_path(message.object_path, fail_on_delete_error=True)
+                await self._process_sms(message, fail_on_delete_error=True)
         logger.info("relay_drain_completed", count_drained=len(messages))
 
     def state(self) -> RelayState:
@@ -186,16 +186,16 @@ class SmsRelay:
             last_error=self._last_error,
         )
 
-    async def _find_sms_by_path(self, sms_path: str) -> IncomingSms | None:
-        messages = await self._modem_client.list_messages()
-        return next((message for message in messages if message.object_path == sms_path), None)
-
     async def _process_sms_path(self, sms_path: str, *, fail_on_delete_error: bool) -> None:
-        sms = await self._find_sms_by_path(sms_path)
+        sms = await self._modem_client.read_message(sms_path)
         if sms is None:
             logger.warning("relay_sms_path_not_found", sms_path=sms_path)
             return
 
+        await self._process_sms(sms, fail_on_delete_error=fail_on_delete_error)
+
+    async def _process_sms(self, sms: IncomingSms, *, fail_on_delete_error: bool) -> None:
+        sms_path = sms.object_path
         item = await self._queue.enqueue(sms)
         if item is None:
             self._metrics.sms_dedup_hits_total.inc()
