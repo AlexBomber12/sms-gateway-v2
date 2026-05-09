@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,6 +13,7 @@ REFRESHED_MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/1"
 SMS_PATH_1 = "/org/freedesktop/ModemManager1/SMS/1"
 SMS_PATH_2 = "/org/freedesktop/ModemManager1/SMS/2"
 SMS_PATH_10 = "/org/freedesktop/ModemManager1/SMS/10"
+SMS_INTERFACE = "org.freedesktop.ModemManager1.Sms"
 
 
 def make_sms_proxy(
@@ -38,6 +40,17 @@ def make_sms_proxy(
     proxy = MagicMock()
     proxy.sms = sms
     proxy.get_interface.return_value = sms
+    return proxy
+
+
+def make_properties_proxy() -> MagicMock:
+    properties = MagicMock()
+    properties.on_properties_changed = MagicMock()
+    properties.off_properties_changed = MagicMock()
+
+    proxy = MagicMock()
+    proxy.properties = properties
+    proxy.get_interface.return_value = properties
     return proxy
 
 
@@ -326,6 +339,107 @@ async def test_list_messages_filters_non_inbound_pdu_type(
     messages = await client.list_messages()
 
     assert messages == []
+    sms.sms.get_number.assert_not_awaited()
+    sms.sms.get_text.assert_not_awaited()
+    sms.sms.get_timestamp.assert_not_awaited()
+
+
+async def test_read_message_returns_text_immediately_if_already_populated(
+    fake_bus: MagicMock,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="message",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    fake_bus.get_proxy_object.return_value = sms
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.01)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    message = await client.read_message(SMS_PATH_1)
+
+    assert message is not None
+    assert message.object_path == SMS_PATH_1
+    assert message.text == "message"
+    assert fake_bus.get_proxy_object.call_count == 1
+
+
+async def test_read_message_waits_for_text_then_returns(
+    fake_bus: MagicMock,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    sms.sms.get_text.side_effect = ["", "populated"]
+    properties = make_properties_proxy()
+
+    def on_properties_changed(callback: object) -> None:
+        assert callable(callback)
+        asyncio.get_running_loop().call_soon(callback, SMS_INTERFACE, {"Text": object()}, [])
+
+    properties.properties.on_properties_changed.side_effect = on_properties_changed
+    fake_bus.get_proxy_object.side_effect = [sms, properties]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    message = await client.read_message(SMS_PATH_1)
+
+    assert message is not None
+    assert message.text == "populated"
+    properties.properties.on_properties_changed.assert_called_once()
+    properties.properties.off_properties_changed.assert_called_once()
+
+
+async def test_read_message_logs_warning_and_returns_empty_on_timeout(
+    fake_bus: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.modem.client.logger", logger)
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    properties = make_properties_proxy()
+    fake_bus.get_proxy_object.side_effect = [sms, properties]
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.001)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    message = await client.read_message(SMS_PATH_1)
+
+    assert message is not None
+    assert message.text == ""
+    logger.warning.assert_called_once_with(
+        "sms_text_wait_timeout",
+        sms_path=SMS_PATH_1,
+        timeout_seconds=0.001,
+    )
+    properties.properties.off_properties_changed.assert_called_once()
+
+
+async def test_read_message_skips_non_inbound_pdu(
+    fake_bus: MagicMock,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="message",
+        timestamp="2026-04-26T10:41:00+00:00",
+        pdu_type="submit",
+    )
+    fake_bus.get_proxy_object.return_value = sms
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.01)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    message = await client.read_message(SMS_PATH_1)
+
+    assert message is None
     sms.sms.get_number.assert_not_awaited()
     sms.sms.get_text.assert_not_awaited()
     sms.sms.get_timestamp.assert_not_awaited()
