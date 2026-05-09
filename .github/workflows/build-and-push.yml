@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: build-and-push-latest
+  group: build-and-push-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
