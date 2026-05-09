@@ -703,6 +703,9 @@ class ModemManagerClient:
 
         properties.on_properties_changed(handle_properties_changed)
         try:
+            text = await self._read_required("Text", sms.get_text)
+            if text != "":
+                return text
             with suppress(TimeoutError):
                 await asyncio.wait_for(text_changed.wait(), timeout=timeout_seconds)
         finally:

@@ -373,7 +373,7 @@ async def test_read_message_waits_for_text_then_returns(
         text="",
         timestamp="2026-04-26T10:41:00+00:00",
     )
-    sms.sms.get_text.side_effect = ["", "populated"]
+    sms.sms.get_text.side_effect = ["", "", "populated"]
     properties = make_properties_proxy()
 
     def on_properties_changed(callback: object) -> None:
@@ -390,6 +390,30 @@ async def test_read_message_waits_for_text_then_returns(
 
     assert message is not None
     assert message.text == "populated"
+    properties.properties.on_properties_changed.assert_called_once()
+    properties.properties.off_properties_changed.assert_called_once()
+
+
+async def test_read_message_rereads_text_after_subscribing(
+    fake_bus: MagicMock,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    sms.sms.get_text.side_effect = ["", "populated"]
+    properties = make_properties_proxy()
+    fake_bus.get_proxy_object.side_effect = [sms, properties]
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=10)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    message = await asyncio.wait_for(client.read_message(SMS_PATH_1), timeout=0.1)
+
+    assert message is not None
+    assert message.text == "populated"
+    assert sms.sms.get_text.await_count == 2
     properties.properties.on_properties_changed.assert_called_once()
     properties.properties.off_properties_changed.assert_called_once()
 
