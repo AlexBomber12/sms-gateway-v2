@@ -445,6 +445,39 @@ async def test_read_message_skips_non_inbound_pdu(
     sms.sms.get_timestamp.assert_not_awaited()
 
 
+async def test_read_message_returns_none_when_sms_object_vanishes(
+    fake_bus: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.UnknownObject", "SMS vanished")
+    fake_bus.introspect.side_effect = error
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.01)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    message = await client.read_message(SMS_PATH_1)
+
+    assert message is None
+    fake_bus.get_proxy_object.assert_not_called()
+
+
+async def test_read_message_propagates_sms_lookup_transport_failures(
+    fake_bus: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.ServiceUnknown", "ModemManager restarted")
+    fake_bus.introspect.side_effect = error
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.01)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(
+        ModemManagerUnavailable,
+        match=f"failed to query SMS object {SMS_PATH_1}",
+    ) as exc:
+        await client.read_message(SMS_PATH_1)
+
+    assert exc.value.__cause__ is error
+
+
 async def test_delete_message_succeeds_silently_on_happy_path(
     fake_bus: MagicMock,
     fake_messaging_proxy: MagicMock,

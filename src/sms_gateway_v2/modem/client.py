@@ -448,7 +448,13 @@ class ModemManagerClient:
         decoder has populated the Text property. This waits briefly for the Text property
         change before returning, while still allowing degraded empty-body delivery on timeout.
         """
-        sms = await self._get_sms_interface(sms_path)
+        try:
+            sms = await self._get_sms_interface(sms_path)
+        except ModemManagerUnavailable as exc:
+            if self._is_unknown_object_unavailable(exc):
+                logger.info("message_read_missing", sms_path=sms_path)
+                return None
+            raise
         pdu_type = self._decode_pdu_type(await self._read_required("PduType", sms.get_pdu_type))
         if pdu_type not in INBOUND_SMS_PDU_TYPES:
             logger.info(
@@ -743,6 +749,9 @@ class ModemManagerClient:
 
     def _is_unknown_object_error(self, exc: BaseException) -> bool:
         return isinstance(exc, DBusError) and exc.type == UNKNOWN_OBJECT_ERROR
+
+    def _is_unknown_object_unavailable(self, exc: ModemManagerUnavailable) -> bool:
+        return exc.__cause__ is not None and self._is_unknown_object_error(exc.__cause__)
 
     def _get_proxy_interface(
         self,
