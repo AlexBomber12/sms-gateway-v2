@@ -54,6 +54,11 @@ For the one-time cutover from the legacy AI-Server gammu relay to
 this stack, follow the runbook in
 [`docs/migration-from-v1.md`](docs/migration-from-v1.md).
 
+## Operations
+
+- Rotate Telegram bot credentials with
+  [`docs/runbooks/rotate-telegram-token.md`](docs/runbooks/rotate-telegram-token.md).
+
 ## Project Layout
 
 ```text
