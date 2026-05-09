@@ -3,6 +3,9 @@
 This guide covers running `sms-gateway-v2` on the NAS host
 (`192.168.50.2`, Ubuntu 24.04) with Docker Compose.
 
+For Telegram credential rotation, see
+[`docs/runbooks/rotate-telegram-token.md`](runbooks/rotate-telegram-token.md).
+
 ## Prerequisites
 
 - Ubuntu 24.04 host with `modemmanager` installed and active:
