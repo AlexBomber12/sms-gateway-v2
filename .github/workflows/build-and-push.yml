@@ -8,6 +8,10 @@ on:
       - "v*"
   workflow_dispatch:
 
+concurrency:
+  group: build-and-push-latest
+  cancel-in-progress: true
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
