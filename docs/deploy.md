@@ -21,32 +21,26 @@ This guide covers running `sms-gateway-v2` on the NAS host
 ## Polkit configuration
 
 The container runs as uid `1000` and talks to ModemManager over the host
-system D-Bus. With Docker's default (no user-namespace remapping) the
-container's uid `1000` is the same identity as the host account that owns
-uid `1000`, so polkit sees that host user as the caller. ModemManager gates
-most of its interfaces behind polkit, so granting access requires a
-dedicated rule.
+system D-Bus. ModemManager gates SMS deletion behind polkit action
+`org.freedesktop.ModemManager1.Messaging`, which normally requires an admin
+authentication prompt. Containers and SSH sessions cannot satisfy that prompt
+reliably, so the host must grant the service through a dedicated group.
 
-Polkit `.rules` files use a JavaScript API where `subject.user` is the
-caller's **username string**, not a UID — the legacy `"#1000"` syntax only
-works in the deprecated `.pkla` format and silently never matches here.
-The portable fix is to match on group membership instead: create a
-dedicated group, add the host user that owns uid `1000` to it, then have
-the rule check `subject.isInGroup(...)`.
-
-Create the group and add the host user that maps to the container uid:
+Create the host group that the compose service joins:
 
 ```bash
-sudo groupadd -f sms-gateway
-sudo usermod -aG sms-gateway "$(getent passwd 1000 | cut -d: -f1)"
+sudo groupadd --system sms-gateway
 ```
 
-Create `/etc/polkit-1/rules.d/50-sms-gateway-v2.rules` on the host with:
+Install the checked-in polkit rule:
+
+```bash
+sudo install -m 0644 deploy/polkit/10-sms-gateway.rules /etc/polkit-1/rules.d/
+```
+
+The rule grants ModemManager actions to callers in the `sms-gateway` group:
 
 ```javascript
-// Allow members of the sms-gateway group (which includes the host user
-// whose uid the container shares) to manage modems and read SMS via
-// ModemManager. Limit to ModemManager interfaces only.
 polkit.addRule(function(action, subject) {
     if (action.id.indexOf("org.freedesktop.ModemManager1.") === 0 &&
         subject.isInGroup("sms-gateway")) {
@@ -55,23 +49,42 @@ polkit.addRule(function(action, subject) {
 });
 ```
 
-Reload polkit so the rule takes effect, then restart the container so its
-process picks up the new group membership:
+Polkit picks up the rule on its next restart or after a host reboot. For
+immediate effect, restart polkit:
 
 ```bash
 sudo systemctl restart polkit
-docker compose -f deploy/docker-compose.yml restart sms-gateway-v2
 ```
 
-### Alternative: run the container as root
+The compose service includes `group_add: ["sms-gateway"]`. Docker resolves the
+group name from the host's `/etc/group` when the container starts, so the group
+must exist before creating or recreating the container.
 
-If the polkit setup is too painful for your environment, you can run the
-container as `root` by adding `user: "0:0"` to the service in
-`deploy/docker-compose.yml`. This bypasses the uid mapping problem entirely
-because polkit grants root unconditional access to ModemManager. The
-tradeoff is that any compromise of the container process runs as root on
-the host's D-Bus, which weakens isolation. The polkit-rule path is
-preferred for a single-tenant home setup.
+Verify the policy from a temporary container before recreating the service:
+
+```bash
+docker run --rm -it \
+  --user 1000:1000 \
+  --group-add sms-gateway \
+  -v /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro \
+  ghcr.io/alexbomber12/sms-gateway-v2:latest \
+  mmcli -m 0 --messaging-list-sms
+
+docker run --rm -it \
+  --user 1000:1000 \
+  --group-add sms-gateway \
+  -v /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro \
+  ghcr.io/alexbomber12/sms-gateway-v2:latest \
+  mmcli -m 0 --messaging-delete-sms=0
+```
+
+Both commands should succeed. `--messaging-list-sms` confirms D-Bus access;
+`--messaging-delete-sms=0` exercises the polkit-protected path. Use an SMS id
+that exists on the modem when verifying deletion.
+
+PR-014 will add a custom AppArmor profile to replace `apparmor=unconfined`.
+When enabling that profile, keep the `group_add: ["sms-gateway"]` setting so
+polkit continues to see the supplementary group on the container process.
 
 ## AppArmor
 
