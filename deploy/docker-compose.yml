@@ -4,7 +4,8 @@
 #   - ModemManager is installed and active on the system bus.
 #   - A polkit rule grants the sms-gateway group access to
 #     org.freedesktop.ModemManager1, and the sms-gateway group exists on
-#     the host. See docs/deploy.md for the exact setup steps.
+#     the host. Its numeric gid is set as SMS_GATEWAY_GROUP_GID in .env.
+#     See docs/deploy.md for the exact setup steps.
 #   - A .env file lives next to this compose file with at least:
 #       RELAY_ENABLED=true
 #       TELEGRAM_BOT_TOKEN=...
@@ -23,7 +24,7 @@ services:
     restart: unless-stopped
     security_opt:
       - apparmor=unconfined
-    group_add: ["sms-gateway"]
+    group_add: ["${SMS_GATEWAY_GROUP_GID:?set SMS_GATEWAY_GROUP_GID in deploy/.env}"]
     env_file:
       - .env
     environment:

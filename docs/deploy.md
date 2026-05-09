@@ -30,6 +30,7 @@ Create the host group that the compose service joins:
 
 ```bash
 sudo groupadd --system sms-gateway
+SMS_GATEWAY_GROUP_GID="$(getent group sms-gateway | cut -d: -f3)"
 ```
 
 Install the checked-in polkit rule:
@@ -56,9 +57,10 @@ immediate effect, restart polkit:
 sudo systemctl restart polkit
 ```
 
-The compose service includes `group_add: ["sms-gateway"]`. Docker resolves the
-group name from the host's `/etc/group` when the container starts, so the group
-must exist before creating or recreating the container.
+The compose service uses the numeric `SMS_GATEWAY_GROUP_GID` value for
+`group_add`. Keep the host group name as `sms-gateway` for polkit, but pass the
+numeric gid to Docker so startup does not depend on the container image having a
+matching group name in `/etc/group`.
 
 Verify the policy from a temporary tools container before recreating the service. The
 runtime `ghcr.io/alexbomber12/sms-gateway-v2:latest` image intentionally does not
@@ -77,14 +79,14 @@ docker build -t sms-gateway-mmcli:local -f /tmp/sms-gateway-mmcli.Dockerfile /tm
 
 docker run --rm -it \
   --user 1000:1000 \
-  --group-add sms-gateway \
+  --group-add "${SMS_GATEWAY_GROUP_GID}" \
   -v /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro \
   sms-gateway-mmcli:local \
   mmcli -m 0 --messaging-list-sms
 
 docker run --rm -it \
   --user 1000:1000 \
-  --group-add sms-gateway \
+  --group-add "${SMS_GATEWAY_GROUP_GID}" \
   -v /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro \
   sms-gateway-mmcli:local \
   mmcli -m 0 --messaging-delete-sms=0
@@ -95,8 +97,8 @@ Both commands should succeed. `--messaging-list-sms` confirms D-Bus access;
 that exists on the modem when verifying deletion.
 
 PR-014 will add a custom AppArmor profile to replace `apparmor=unconfined`.
-When enabling that profile, keep the `group_add: ["sms-gateway"]` setting so
-polkit continues to see the supplementary group on the container process.
+When enabling that profile, keep the numeric `group_add` setting so polkit
+continues to see the supplementary group on the container process.
 
 ## AppArmor
 
@@ -124,10 +126,11 @@ From the repository root on the NAS host:
 cp .env.example deploy/.env
 # Edit deploy/.env and set at least:
 #   RELAY_ENABLED=true
+#   SMS_GATEWAY_GROUP_GID=<output from getent group sms-gateway | cut -d: -f3>
 #   TELEGRAM_BOT_TOKEN=<bot token from BotFather>
 #   TELEGRAM_CHAT_ID=<numeric chat id, can be negative for groups>
 
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
 
 `HOST` can be left unset (or set to any value) in `deploy/.env` — the compose
@@ -154,7 +157,7 @@ before starting the stack.
 ## Verifying
 
 ```bash
-docker compose -f deploy/docker-compose.yml ps
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
 # STATUS column should read "Up (healthy)" within ~40 seconds of startup.
 
 curl -s http://127.0.0.1:8091/healthz
@@ -171,8 +174,8 @@ not detecting the modem or the polkit rule is not in effect. Check
 ## Updating
 
 ```bash
-docker compose -f deploy/docker-compose.yml pull
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml pull
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
 
 The named volume persists across image upgrades, so the queue and dedup
@@ -181,12 +184,12 @@ database survive the restart.
 ## Logs
 
 ```bash
-docker compose -f deploy/docker-compose.yml logs -f sms-gateway-v2
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f sms-gateway-v2
 ```
 
 Logs are emitted as `structlog` JSON on stdout. Filter with `jq` if needed:
 
 ```bash
-docker compose -f deploy/docker-compose.yml logs --no-color sms-gateway-v2 \
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs --no-color sms-gateway-v2 \
     | jq -r 'select(.level == "error")'
 ```
