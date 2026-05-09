@@ -73,6 +73,24 @@ tradeoff is that any compromise of the container process runs as root on
 the host's D-Bus, which weakens isolation. The polkit-rule path is
 preferred for a single-tenant home setup.
 
+## AppArmor
+
+On Ubuntu hosts, Docker's default `docker-default` AppArmor profile blocks
+D-Bus method calls from the container to the system bus, including
+ModemManager1 introspection. When this happens, startup fails with
+`An AppArmor policy prevents this sender from sending this message to this recipient`.
+
+The production deploy compose file ships with `security_opt: [apparmor=unconfined]`
+for the `sms-gateway-v2` service to bypass that host AppArmor denial. This means
+the container loses Docker's default AppArmor mediation. The service is already
+privileged with respect to ModemManager because it must talk to the host system
+bus to function, while still running as uid `1000` instead of root and exposing
+its only published port on `127.0.0.1`.
+
+A future hardening improvement can replace the unconfined opt-out with a custom
+AppArmor profile that narrowly permits only the required ModemManager D-Bus
+paths.
+
 ## First run
 
 From the repository root on the NAS host:
