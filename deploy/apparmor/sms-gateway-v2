@@ -65,8 +65,14 @@ profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
 
   dbus (send)
     bus=system
-    path=/org/freedesktop/ModemManager1/{Modem,Sms,SIM,Bearer}/**
+    path=/org/freedesktop/ModemManager1/{Modem,SMS,SIM,Bearer}/**
     interface=org.freedesktop.DBus.{Introspectable,Properties},
+
+  dbus (send)
+    bus=system
+    path=/org/freedesktop/ModemManager1/Modem/**
+    interface=org.freedesktop.ModemManager1.Modem
+    member=Reset,
 
   dbus (send)
     bus=system
@@ -76,7 +82,7 @@ profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
 
   dbus (send)
     bus=system
-    path=/org/freedesktop/ModemManager1/Sms/**
+    path=/org/freedesktop/ModemManager1/SMS/**
     interface=org.freedesktop.ModemManager1.Sms
     member=*,
 
@@ -94,7 +100,7 @@ profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
 
   dbus (receive)
     bus=system
-    path=/org/freedesktop/ModemManager1/{Modem,Sms,SIM,Bearer}/**
+    path=/org/freedesktop/ModemManager1/{Modem,SMS,SIM,Bearer}/**
     interface=org.freedesktop.DBus.Properties
     member=PropertiesChanged,
 
