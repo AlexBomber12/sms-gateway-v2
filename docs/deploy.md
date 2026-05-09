@@ -60,21 +60,33 @@ The compose service includes `group_add: ["sms-gateway"]`. Docker resolves the
 group name from the host's `/etc/group` when the container starts, so the group
 must exist before creating or recreating the container.
 
-Verify the policy from a temporary container before recreating the service:
+Verify the policy from a temporary tools container before recreating the service. The
+runtime `ghcr.io/alexbomber12/sms-gateway-v2:latest` image intentionally does not
+include `mmcli`, so build a throwaway image that contains only the ModemManager CLI:
 
 ```bash
+cat >/tmp/sms-gateway-mmcli.Dockerfile <<'EOF'
+FROM ubuntu:24.04
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        modemmanager \
+    && rm -rf /var/lib/apt/lists/*
+EOF
+
+docker build -t sms-gateway-mmcli:local -f /tmp/sms-gateway-mmcli.Dockerfile /tmp
+
 docker run --rm -it \
   --user 1000:1000 \
   --group-add sms-gateway \
   -v /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro \
-  ghcr.io/alexbomber12/sms-gateway-v2:latest \
+  sms-gateway-mmcli:local \
   mmcli -m 0 --messaging-list-sms
 
 docker run --rm -it \
   --user 1000:1000 \
   --group-add sms-gateway \
   -v /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro \
-  ghcr.io/alexbomber12/sms-gateway-v2:latest \
+  sms-gateway-mmcli:local \
   mmcli -m 0 --messaging-delete-sms=0
 ```
 
