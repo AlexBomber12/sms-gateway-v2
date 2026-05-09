@@ -22,6 +22,8 @@ services:
     image: ghcr.io/alexbomber12/sms-gateway-v2:latest
     container_name: sms-gateway-v2
     restart: unless-stopped
+    security_opt:
+      - apparmor=unconfined
     env_file:
       - .env
     environment:
