@@ -31,17 +31,18 @@ serving production. They confirm v2 is ready before the SIM is moved.
    cp .env.example deploy/.env
    # Edit deploy/.env:
    #   RELAY_ENABLED=false
+   #   SMS_GATEWAY_GROUP_GID=<output from getent group sms-gateway | cut -d: -f3>
    #   TELEGRAM_BOT_TOKEN=<bot token>
    #   TELEGRAM_CHAT_ID=<numeric chat id>
    # HOST may be left unset; the compose file pins HOST=0.0.0.0 at the service level.
-   docker compose -f deploy/docker-compose.yml up -d
+   docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
    curl -s http://127.0.0.1:8091/healthz
    curl -s http://127.0.0.1:8091/metrics | head
    ```
    `/healthz` must return `{"status":"ok"}`. Stop the container after
    verifying:
    ```bash
-   docker compose -f deploy/docker-compose.yml down
+   docker compose --env-file deploy/.env -f deploy/docker-compose.yml down
    ```
 3. **Telegram credentials are valid.** Send a manual test message
    directly via the Bot API so you know the token and chat id work
@@ -104,8 +105,8 @@ serving production. They confirm v2 is ready before the SIM is moved.
    `RELAY_ENABLED=true` and the Telegram credentials point at the
    production chat. Then:
    ```bash
-   docker compose -f deploy/docker-compose.yml up -d
-   docker compose -f deploy/docker-compose.yml logs -f
+   docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+   docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f
    ```
    Look for the `relay_started` event with `recovered=0` (the queue
    is empty on first start). The container should reach
@@ -152,7 +153,7 @@ within the first hour after cutover, revert to v1:
 
 1. **Stop v2.**
    ```bash
-   docker compose -f deploy/docker-compose.yml down
+   docker compose --env-file deploy/.env -f deploy/docker-compose.yml down
    ```
 2. **Move the SIM back to the Huawei E353 on AI-Server.** Reverse the
    physical swap from step 2 of cutover.
@@ -165,7 +166,7 @@ within the first hour after cutover, revert to v1:
    within a minute.
 4. **File a bug.** Open an issue in this repository titled
    `cutover failed on YYYY-MM-DD`, attaching:
-   - `docker compose -f deploy/docker-compose.yml logs --no-color sms-gateway-v2 > v2.log`
+   - `docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs --no-color sms-gateway-v2 > v2.log`
    - The output of `mmcli -m 0` and `mmcli -m 0 --messaging-list-sms`
      captured before reverting
    - Anything Telegram itself returned (HTTP errors, 4xx codes)
@@ -180,7 +181,7 @@ cutover step 3:
 2. Run the cutover steps and verify the smoke-test SMS lands in the
    test chat.
 3. Edit `deploy/.env` to point at the production chat id and
-   `docker compose -f deploy/docker-compose.yml restart`.
+   `docker compose --env-file deploy/.env -f deploy/docker-compose.yml restart`.
 4. Send a second SMS to confirm it now lands in the production chat.
 
 The dedup database remembers the smoke-test SMS via its content hash,

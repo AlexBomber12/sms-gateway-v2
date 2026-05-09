@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     )
     metrics_path: str = "/metrics"
     relay_enabled: bool = False
+    sms_gateway_group_gid: str = ""
     queue_gauge_interval_seconds: float = Field(default=30.0, ge=1.0)
     modem_watchdog_interval_seconds: float = Field(default=60.0, ge=10.0)
     modem_watchdog_signal_zero_threshold: int = Field(default=5, ge=1)

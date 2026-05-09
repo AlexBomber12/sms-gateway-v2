@@ -1,0 +1,6 @@
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.ModemManager1.") === 0 &&
+        subject.isInGroup("sms-gateway")) {
+        return polkit.Result.YES;
+    }
+});
