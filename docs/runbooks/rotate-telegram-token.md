@@ -65,10 +65,10 @@ Rotate the Telegram bot token when any of these conditions apply:
    TELEGRAM_BOT_TOKEN=<NEW_TOKEN>
    ```
 
-9. Verify the token setting without dumping the full value.
+9. Verify the token setting without dumping the value.
 
    ```bash
-   grep TELEGRAM_BOT_TOKEN .env.new | head -c 30 && echo
+   grep -Eq '^TELEGRAM_BOT_TOKEN=[^<[:space:]].+$' .env.new
    ```
 
 10. Atomically replace the active env file.
