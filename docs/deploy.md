@@ -107,16 +107,37 @@ D-Bus method calls from the container to the system bus, including
 ModemManager1 introspection. When this happens, startup fails with
 `An AppArmor policy prevents this sender from sending this message to this recipient`.
 
-The production deploy compose file ships with `security_opt: [apparmor=unconfined]`
-for the `sms-gateway-v2` service to bypass that host AppArmor denial. This means
-the container loses Docker's default AppArmor mediation. The service is already
-privileged with respect to ModemManager because it must talk to the host system
-bus to function, while still running as uid `1000` instead of root and exposing
-its only published port on `127.0.0.1`.
+The production compose file uses a custom `sms-gateway-v2` AppArmor profile.
+Install and load it on the host before recreating the service:
 
-A future hardening improvement can replace the unconfined opt-out with a custom
-AppArmor profile that narrowly permits only the required ModemManager D-Bus
-paths.
+```bash
+sudo install -m 0644 deploy/apparmor/sms-gateway-v2 /etc/apparmor.d/sms-gateway-v2
+sudo apparmor_parser -r -W /etc/apparmor.d/sms-gateway-v2
+sudo aa-status | grep sms-gateway-v2
+```
+
+Recreate the container after the profile is loaded:
+
+```bash
+cd deploy
+docker compose -p sms-gateway-v2 up -d --force-recreate
+```
+
+After about 30 seconds, check the host audit log for profile denials:
+
+```bash
+sudo dmesg | grep audit | tail -50
+```
+
+Any `apparmor="DENIED"` line that mentions `sms-gateway-v2` means the profile is
+missing a rule for an observed runtime access. Report the denial upstream as a
+follow-up PR with the full audit line and the operation that triggered it.
+
+If the custom profile breaks production behavior and the service must be brought
+back online while debugging, temporarily change the host's local compose file to
+`apparmor=unconfined` and recreate the container. Keep that change uncommitted.
+This restores the pre-PR-014 posture and is acceptable for short operational
+windows while collecting the missing AppArmor denial.
 
 ## First run
 

@@ -1,0 +1,106 @@
+abi <abi/3.0>,
+
+# AppArmor profile for the sms-gateway-v2 Docker container.
+# The baseline follows Docker's default container profile posture, then permits
+# the narrow system D-Bus traffic needed for ModemManager SMS polling/deletion.
+# Load on the host with:
+#   sudo apparmor_parser -r -W /etc/apparmor.d/sms-gateway-v2
+
+#include <tunables/global>
+
+profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network,
+  capability,
+  file,
+  umount,
+
+  deny mount,
+
+  deny /sys/firmware/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+  deny /sys/kernel/debug/** rwklx,
+  deny /sys/fs/selinux/** rwklx,
+  deny /sys/fs/cgroup/** wklx,
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/efi/efivars/** rwklx,
+
+  deny /proc/acpi/** rwklx,
+  deny /proc/asound/** rwklx,
+  deny /proc/bus/** rwklx,
+  deny /proc/fs/** rwklx,
+  deny /proc/irq/** rwklx,
+  deny /proc/scsi/** rwklx,
+  deny /proc/sys/** wklx,
+  deny /proc/sysrq-trigger rwklx,
+  deny /proc/kcore rwklx,
+  deny /proc/kmem rwklx,
+  deny /proc/mem rwklx,
+  deny /proc/sched_debug rwklx,
+  deny /proc/timer_list rwklx,
+
+  deny ptrace (trace,read,tracedby,readby) peer=unconfined,
+
+  signal (receive) peer=unconfined,
+  signal (send,receive) peer=sms-gateway-v2,
+
+  /run/dbus/system_bus_socket r,
+  /var/run/dbus/system_bus_socket r,
+
+  dbus (send)
+    bus=system
+    path=/org/freedesktop/DBus
+    interface=org.freedesktop.DBus
+    member={Hello,AddMatch,RemoveMatch,GetNameOwner,NameHasOwner,RequestName,ReleaseName},
+
+  dbus (send)
+    bus=system
+    path=/org/freedesktop/ModemManager1
+    interface=org.freedesktop.DBus.{Introspectable,Properties,ObjectManager},
+
+  dbus (send)
+    bus=system
+    path=/org/freedesktop/ModemManager1/{Modem,Sms,SIM,Bearer}/**
+    interface=org.freedesktop.DBus.{Introspectable,Properties},
+
+  dbus (send)
+    bus=system
+    path=/org/freedesktop/ModemManager1/Modem/**
+    interface=org.freedesktop.ModemManager1.Modem.Messaging
+    member={List,Delete},
+
+  dbus (send)
+    bus=system
+    path=/org/freedesktop/ModemManager1/Sms/**
+    interface=org.freedesktop.ModemManager1.Sms
+    member=*,
+
+  dbus (receive)
+    bus=system
+    path=/org/freedesktop/DBus
+    interface=org.freedesktop.DBus
+    member=NameOwnerChanged,
+
+  dbus (receive)
+    bus=system
+    path=/org/freedesktop/ModemManager1
+    interface=org.freedesktop.DBus.ObjectManager
+    member={InterfacesAdded,InterfacesRemoved},
+
+  dbus (receive)
+    bus=system
+    path=/org/freedesktop/ModemManager1/{Modem,Sms,SIM,Bearer}/**
+    interface=org.freedesktop.DBus.Properties
+    member=PropertiesChanged,
+
+  dbus (receive)
+    bus=system
+    path=/org/freedesktop/ModemManager1/Modem/**
+    interface=org.freedesktop.ModemManager1.Modem.Messaging
+    member={Added,Deleted,MessageAdded},
+}

@@ -23,7 +23,7 @@ services:
     container_name: sms-gateway-v2
     restart: unless-stopped
     security_opt:
-      - apparmor=unconfined
+      - apparmor=sms-gateway-v2
     group_add: ["${SMS_GATEWAY_GROUP_GID:?set SMS_GATEWAY_GROUP_GID in deploy/.env}"]
     env_file:
       - .env
