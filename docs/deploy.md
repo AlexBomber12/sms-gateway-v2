@@ -181,6 +181,18 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 The named volume persists across image upgrades, so the queue and dedup
 database survive the restart.
 
+## Published images
+
+Merges to `main` publish `ghcr.io/alexbomber12/sms-gateway-v2:latest`, which is
+the tag consumed by `deploy/docker-compose.yml`. The image workflow also
+publishes immutable `sha-<short>` tags for main commits and `v*` tags for
+release pushes, so operators can pin or roll back to a specific build.
+
+After the first successful publish, make the GHCR package publicly readable one
+time in GitHub repo Settings -> Packages. Without that package visibility
+change, unauthenticated hosts without a GHCR token cannot run
+`docker compose pull`.
+
 ## Logs
 
 ```bash
