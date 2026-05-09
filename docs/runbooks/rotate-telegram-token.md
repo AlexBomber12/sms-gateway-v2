@@ -102,7 +102,7 @@ Rotate the Telegram bot token when any of these conditions apply:
 
 ## Rollback
 
-If the new token fails and logs show `telegram_send_failed` events with
+If the new token fails and logs show `telegram_send_auth_failed` events with
 `401 Unauthorized`, the old token is already revoked and cannot be restored.
 
 Recover by immediately generating another brand-new token through the same BotFather
