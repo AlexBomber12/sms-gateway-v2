@@ -1,0 +1,14 @@
+[Unit]
+Description=Enable USB modem after ModemManager is ready
+After=ModemManager.service
+Wants=ModemManager.service
+ConditionPathExists=/usr/bin/mmcli
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 5
+ExecStart=/bin/sh -c 'for i in 1 2 3 4 5; do /usr/bin/mmcli -m 0 --enable && exit 0; sleep 3; done; echo "modem enable failed after 5 attempts" >&2; exit 1'
+
+[Install]
+WantedBy=multi-user.target

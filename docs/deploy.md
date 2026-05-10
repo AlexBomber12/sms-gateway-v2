@@ -239,16 +239,40 @@ boot. After a host reboot, `mmcli -m 0` may show `state: disabled` and
 `signal: 0%`, which causes the relay to log `signal_read percent=0` and
 `registration_read registration=unknown`.
 
-Enable the modem once from the host:
+Install the host-side modem enable unit from the repository root:
+
+```bash
+sudo install -m 0644 deploy/systemd/sms-gateway-modem-enable.service /etc/systemd/system/sms-gateway-modem-enable.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now sms-gateway-modem-enable.service
+```
+
+Verify that the oneshot unit completed and the modem is enabled:
+
+```bash
+systemctl status sms-gateway-modem-enable.service
+mmcli -m 0
+```
+
+`systemctl status` should show `Active: active (exited)` after the first run.
+`mmcli -m 0` should report `state: enabled`, and shortly after
+`state: registered` once the modem associates with the network.
+
+The unit waits for `ModemManager.service`, sleeps for 5 seconds to allow the
+cold-boot scan to settle, then retries `mmcli -m 0 --enable` up to 5 times with
+a 3 second delay between attempts. If the modem is permanently absent, the unit
+fails with a logged error instead of looping indefinitely.
+
+The post-reboot manual enable command is superseded by the systemd unit for
+normal operations. Keep it as a diagnostic fallback when the unit is not
+installed or when intentionally testing a disabled modem state:
 
 ```bash
 sudo mmcli -m 0 --enable
 ```
 
-This is a known limitation. A future systemd unit tracked separately will
-automate the enable step. The relay container itself is healthy in this state
-and resumes normal operation as soon as the modem registers; no container
-restart is needed.
+The relay container itself is healthy while the modem is disabled and resumes
+normal operation as soon as the modem registers; no container restart is needed.
 
 ## Logs
 
