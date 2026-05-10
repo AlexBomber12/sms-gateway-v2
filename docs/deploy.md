@@ -99,10 +99,6 @@ Both commands should succeed. `--messaging-list-sms` confirms D-Bus access;
 `--messaging-delete-sms=0` exercises the polkit-protected path. Use an SMS id
 that exists on the modem when verifying deletion.
 
-PR-014 will add a custom AppArmor profile to replace `apparmor=unconfined`.
-When enabling that profile, keep the numeric `group_add` setting so polkit
-continues to see the supplementary group on the container process.
-
 ## AppArmor
 
 On Ubuntu hosts, Docker's default `docker-default` AppArmor profile blocks
@@ -129,12 +125,13 @@ docker compose -p sms-gateway-v2 up -d --force-recreate
 After about 30 seconds, check the host audit log for profile denials:
 
 ```bash
-sudo dmesg | grep audit | tail -50
+sudo dmesg | grep -i apparmor | tail -20
 ```
 
 Any `apparmor="DENIED"` line that mentions `sms-gateway-v2` means the profile is
 missing a rule for an observed runtime access. Report the denial upstream as a
 follow-up PR with the full audit line and the operation that triggered it.
+Absence of fresh DENIED entries after the recreate is the expected state.
 
 If the custom profile breaks production behavior and the service must be brought
 back online while debugging, temporarily change the host's local compose file to
@@ -147,15 +144,32 @@ windows while collecting the missing AppArmor denial.
 From the repository root on the NAS host:
 
 ```bash
-cp .env.example deploy/.env
-# Edit deploy/.env and set at least:
-#   RELAY_ENABLED=true
-#   SMS_GATEWAY_GROUP_GID=<output from getent group sms-gateway | cut -d: -f3>
-#   TELEGRAM_BOT_TOKEN=<bot token from BotFather>
-#   TELEGRAM_CHAT_ID=<numeric chat id, can be negative for groups>
+cat >deploy/.env <<'EOF'
+RELAY_ENABLED=true
+SMS_GATEWAY_GROUP_GID=<output from getent group sms-gateway | cut -d: -f3>
+TELEGRAM_BOT_TOKEN=<bot token from BotFather>
+TELEGRAM_CHAT_ID=<numeric chat id, can be negative for groups>
+EOF
+chmod 600 deploy/.env
+```
+
+Before starting the service, edit `deploy/.env` and replace every placeholder
+value. Use the numeric gid from `getent group sms-gateway | cut -d: -f3` for
+`SMS_GATEWAY_GROUP_GID`, the bot token from BotFather for
+`TELEGRAM_BOT_TOKEN`, and the target numeric chat id for `TELEGRAM_CHAT_ID`.
+
+```bash
+getent group sms-gateway | cut -d: -f3
+"${EDITOR:-vi}" deploy/.env
+grep -Eq '^SMS_GATEWAY_GROUP_GID=[0-9]+$' deploy/.env
+grep -Eq '^TELEGRAM_BOT_TOKEN=[^<[:space:]].+$' deploy/.env
+grep -Eq '^TELEGRAM_CHAT_ID=-?[0-9]+$' deploy/.env
 
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
+
+All other variables documented in `.env.example` have safe production defaults
+and only need overriding if the operator wants different behavior.
 
 `HOST` can be left unset (or set to any value) in `deploy/.env` — the compose
 file pins `HOST=0.0.0.0` at the service level via `environment:`, which takes
@@ -217,6 +231,24 @@ After the first successful publish, make the GHCR package publicly readable one
 time in GitHub repo Settings -> Packages. Without that package visibility
 change, unauthenticated hosts without a GHCR token cannot run
 `docker compose pull`.
+
+## Modem state after host reboot
+
+On Ubuntu 24.04, ModemManager does not consistently auto-enable USB modems on
+boot. After a host reboot, `mmcli -m 0` may show `state: disabled` and
+`signal: 0%`, which causes the relay to log `signal_read percent=0` and
+`registration_read registration=unknown`.
+
+Enable the modem once from the host:
+
+```bash
+sudo mmcli -m 0 --enable
+```
+
+This is a known limitation. A future systemd unit tracked separately will
+automate the enable step. The relay container itself is healthy in this state
+and resumes normal operation as soon as the modem registers; no container
+restart is needed.
 
 ## Logs
 
