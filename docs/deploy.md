@@ -151,6 +151,19 @@ TELEGRAM_BOT_TOKEN=<bot token from BotFather>
 TELEGRAM_CHAT_ID=<numeric chat id, can be negative for groups>
 EOF
 chmod 600 deploy/.env
+```
+
+Before starting the service, edit `deploy/.env` and replace every placeholder
+value. Use the numeric gid from `getent group sms-gateway | cut -d: -f3` for
+`SMS_GATEWAY_GROUP_GID`, the bot token from BotFather for
+`TELEGRAM_BOT_TOKEN`, and the target numeric chat id for `TELEGRAM_CHAT_ID`.
+
+```bash
+getent group sms-gateway | cut -d: -f3
+"${EDITOR:-vi}" deploy/.env
+grep -Eq '^SMS_GATEWAY_GROUP_GID=[0-9]+$' deploy/.env
+grep -Eq '^TELEGRAM_BOT_TOKEN=[^<[:space:]].+$' deploy/.env
+grep -Eq '^TELEGRAM_CHAT_ID=-?[0-9]+$' deploy/.env
 
 docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
 ```
