@@ -58,6 +58,13 @@ profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
     interface=org.freedesktop.DBus
     member={Hello,AddMatch,RemoveMatch,GetNameOwner,NameHasOwner,RequestName,ReleaseName},
 
+  # The relay only needs:
+  #   - DBus.Properties on Sms objects to read Number/Text/Timestamp/PduType
+  #   - Modem.Messaging.{List,Delete} to enumerate and remove processed SMSes
+  #   - Modem.Reset for the watchdog reset path
+  # It never calls methods on the org.freedesktop.ModemManager1.Sms interface.
+  # If a future feature requires sending or storing SMS, narrow rules for those
+  # specific members must be added here, not a member=* wildcard.
   dbus (send)
     bus=system
     path=/org/freedesktop/ModemManager1
@@ -79,12 +86,6 @@ profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
     path=/org/freedesktop/ModemManager1/Modem/**
     interface=org.freedesktop.ModemManager1.Modem.Messaging
     member={List,Delete},
-
-  dbus (send)
-    bus=system
-    path=/org/freedesktop/ModemManager1/SMS/**
-    interface=org.freedesktop.ModemManager1.Sms
-    member=*,
 
   dbus (receive)
     bus=system
