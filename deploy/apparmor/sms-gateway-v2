@@ -46,8 +46,13 @@ profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
 
   deny ptrace (trace,read,tracedby,readby) peer=unconfined,
 
-  signal (receive) peer=unconfined,
-  signal (send,receive) peer=sms-gateway-v2,
+  # runc sends SIGTERM at docker stop start, SIGKILL after the grace timeout,
+  # and may also send SIGCONT/SIGSTOP during pause/unpause flows. Without an
+  # explicit set=(...) clause AppArmor 3.x denies these even though peer is
+  # unconfined, which slows graceful shutdown and clutters dmesg with
+  # apparmor="DENIED" entries.
+  signal (receive) set=(term, kill, cont, stop, hup, int, quit, usr1, usr2) peer=unconfined,
+  signal (send, receive) set=(term, kill, cont, stop, hup, int, quit, usr1, usr2) peer=sms-gateway-v2,
 
   /run/dbus/system_bus_socket r,
   /var/run/dbus/system_bus_socket r,
