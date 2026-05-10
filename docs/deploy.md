@@ -112,6 +112,28 @@ Install and load it on the host before recreating the service:
 ```bash
 sudo install -m 0644 deploy/apparmor/sms-gateway-v2 /etc/apparmor.d/sms-gateway-v2
 sudo apparmor_parser -r -W /etc/apparmor.d/sms-gateway-v2
+```
+
+If `dmesg` shows `apparmor="STATUS" ... info="same as current profile, skipping"`
+after a profile update and the new rules do not appear to take effect, the parser
+detected an unchanged compiled cache and skipped the kernel reload. Force a clean
+reload:
+
+```bash
+sudo apparmor_parser -R /etc/apparmor.d/sms-gateway-v2
+sudo rm -rf /var/cache/apparmor/*/sms-gateway-v2
+sudo apparmor_parser -a -W /etc/apparmor.d/sms-gateway-v2
+sudo aa-status | grep sms-gateway-v2
+```
+
+The window between `-R` (remove) and `-a` (add) is approximately one second.
+Existing container processes retain their loaded profile through the gap; do not
+run `docker compose up -d --force-recreate` until `aa-status` confirms the
+profile is loaded again.
+
+Verify the profile is loaded:
+
+```bash
 sudo aa-status | grep sms-gateway-v2
 ```
 
