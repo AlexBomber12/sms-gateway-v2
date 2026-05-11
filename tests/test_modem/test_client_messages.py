@@ -367,6 +367,33 @@ async def test_read_message_returns_text_immediately_if_already_populated(
     assert fake_bus.get_proxy_object.call_count == 2
 
 
+async def test_read_message_returns_populated_text_when_properties_lookup_fails(
+    fake_bus: MagicMock,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="message",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    properties_error = DBusError(
+        "org.freedesktop.DBus.Error.ServiceUnknown",
+        "ModemManager restarted",
+    )
+    fake_bus.introspect.side_effect = [object(), properties_error]
+    fake_bus.get_proxy_object.return_value = sms
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.01)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    message = await client.read_message(SMS_PATH_1)
+
+    assert message is not None
+    assert message.object_path == SMS_PATH_1
+    assert message.text == "message"
+    assert sms.sms.get_text.await_count == 1
+    assert fake_bus.get_proxy_object.call_count == 1
+
+
 async def test_read_message_waits_for_text_then_returns(
     fake_bus: MagicMock,
 ) -> None:
@@ -425,6 +452,36 @@ async def test_read_message_recovers_when_no_signal_fires(
     assert sms.sms.get_text.await_count == 2
     properties.properties.on_properties_changed.assert_called_once()
     properties.properties.off_properties_changed.assert_called_once()
+
+
+async def test_read_message_polls_when_properties_lookup_fails(
+    fake_bus: MagicMock,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    sms.sms.get_text.side_effect = ["", "populated"]
+    properties_error = DBusError(
+        "org.freedesktop.DBus.Error.ServiceUnknown",
+        "ModemManager restarted",
+    )
+    fake_bus.introspect.side_effect = [object(), properties_error]
+    fake_bus.get_proxy_object.return_value = sms
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=10)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    started_at = time.monotonic()
+    message = await asyncio.wait_for(client.read_message(SMS_PATH_1), timeout=1.0)
+    elapsed = time.monotonic() - started_at
+
+    assert message is not None
+    assert message.text == "populated"
+    assert elapsed >= 0.5
+    assert sms.sms.get_text.await_count == 2
+    assert fake_bus.get_proxy_object.call_count == 1
 
 
 async def test_read_message_logs_warning_and_returns_empty_on_timeout(
