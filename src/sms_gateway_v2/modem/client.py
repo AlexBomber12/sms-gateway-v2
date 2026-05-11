@@ -464,9 +464,39 @@ class ModemManagerClient:
             )
             return None
 
-        text = await self._read_required("Text", sms.get_text)
-        if text == "":
-            text = await self._wait_for_sms_text(sms_path, sms)
+        timeout_seconds = self._sms_text_wait_timeout_seconds
+        if timeout_seconds is None:
+            timeout_seconds = get_settings().modem_sms_text_wait_timeout_seconds
+        text_changed = asyncio.Event()
+        properties: DBusPropertiesInterface | None = None
+
+        def handle_properties_changed(
+            interface_name: str,
+            changed_properties: dict[str, object],
+            _invalidated_properties: list[str],
+        ) -> None:
+            if interface_name == SMS_INTERFACE and "Text" in changed_properties:
+                text_changed.set()
+
+        try:
+            properties = await self._get_dbus_properties_interface(sms_path)
+        except ModemManagerUnavailable:
+            text = await self._read_required("Text", sms.get_text)
+            if text == "":
+                text = await self._wait_for_sms_text(sms_path, sms, text_changed, timeout_seconds)
+        else:
+            properties.on_properties_changed(handle_properties_changed)
+            try:
+                text = await self._read_required("Text", sms.get_text)
+                if text == "":
+                    text = await self._wait_for_sms_text(
+                        sms_path,
+                        sms,
+                        text_changed,
+                        timeout_seconds,
+                    )
+            finally:
+                properties.off_properties_changed(handle_properties_changed)
 
         message = IncomingSms(
             object_path=sms_path,
@@ -686,32 +716,26 @@ class ModemManagerClient:
             ),
         )
 
-    async def _wait_for_sms_text(self, sms_path: str, sms: SmsInterface) -> str:
-        timeout_seconds = self._sms_text_wait_timeout_seconds
-        if timeout_seconds is None:
-            timeout_seconds = get_settings().modem_sms_text_wait_timeout_seconds
-        text_changed = asyncio.Event()
-        properties = await self._get_dbus_properties_interface(sms_path)
-
-        def handle_properties_changed(
-            interface_name: str,
-            changed_properties: dict[str, object],
-            _invalidated_properties: list[str],
-        ) -> None:
-            if interface_name == SMS_INTERFACE and "Text" in changed_properties:
-                text_changed.set()
-
-        properties.on_properties_changed(handle_properties_changed)
-        try:
+    async def _wait_for_sms_text(
+        self,
+        sms_path: str,
+        sms: SmsInterface,
+        text_changed: asyncio.Event,
+        timeout_seconds: float,
+    ) -> str:
+        # Smaller polls recover no-signal SMS faster; larger polls reduce D-Bus traffic.
+        poll_interval = 0.5
+        deadline = time.monotonic() + timeout_seconds
+        text = ""
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(text_changed.wait(), timeout=min(poll_interval, remaining))
+            text_changed.clear()
             text = await self._read_required("Text", sms.get_text)
             if text != "":
                 return text
-            with suppress(TimeoutError):
-                await asyncio.wait_for(text_changed.wait(), timeout=timeout_seconds)
-        finally:
-            properties.off_properties_changed(handle_properties_changed)
 
-        text = await self._read_required("Text", sms.get_text)
         if text == "":
             logger.warning(
                 "sms_text_wait_timeout",
