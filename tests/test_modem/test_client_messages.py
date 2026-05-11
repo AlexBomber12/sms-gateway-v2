@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -362,7 +363,8 @@ async def test_read_message_returns_text_immediately_if_already_populated(
     assert message is not None
     assert message.object_path == SMS_PATH_1
     assert message.text == "message"
-    assert fake_bus.get_proxy_object.call_count == 1
+    assert sms.sms.get_text.await_count == 1
+    assert fake_bus.get_proxy_object.call_count == 2
 
 
 async def test_read_message_waits_for_text_then_returns(
@@ -373,7 +375,7 @@ async def test_read_message_waits_for_text_then_returns(
         text="",
         timestamp="2026-04-26T10:41:00+00:00",
     )
-    sms.sms.get_text.side_effect = ["", "", "populated"]
+    sms.sms.get_text.side_effect = ["", "populated"]
     properties = make_properties_proxy()
 
     def on_properties_changed(callback: object) -> None:
@@ -386,15 +388,19 @@ async def test_read_message_waits_for_text_then_returns(
     client._bus = fake_bus
     client._modem_path = MODEM_PATH
 
+    started_at = time.monotonic()
     message = await client.read_message(SMS_PATH_1)
+    elapsed = time.monotonic() - started_at
 
     assert message is not None
     assert message.text == "populated"
+    assert elapsed < 0.5
+    assert sms.sms.get_text.await_count == 2
     properties.properties.on_properties_changed.assert_called_once()
     properties.properties.off_properties_changed.assert_called_once()
 
 
-async def test_read_message_rereads_text_after_subscribing(
+async def test_read_message_recovers_when_no_signal_fires(
     fake_bus: MagicMock,
 ) -> None:
     sms = make_sms_proxy(
@@ -409,10 +415,13 @@ async def test_read_message_rereads_text_after_subscribing(
     client._bus = fake_bus
     client._modem_path = MODEM_PATH
 
-    message = await asyncio.wait_for(client.read_message(SMS_PATH_1), timeout=0.1)
+    started_at = time.monotonic()
+    message = await asyncio.wait_for(client.read_message(SMS_PATH_1), timeout=1.0)
+    elapsed = time.monotonic() - started_at
 
     assert message is not None
     assert message.text == "populated"
+    assert elapsed >= 0.5
     assert sms.sms.get_text.await_count == 2
     properties.properties.on_properties_changed.assert_called_once()
     properties.properties.off_properties_changed.assert_called_once()
@@ -431,18 +440,21 @@ async def test_read_message_logs_warning_and_returns_empty_on_timeout(
     )
     properties = make_properties_proxy()
     fake_bus.get_proxy_object.side_effect = [sms, properties]
-    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.001)
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.05)
     client._bus = fake_bus
     client._modem_path = MODEM_PATH
 
+    started_at = time.monotonic()
     message = await client.read_message(SMS_PATH_1)
+    elapsed = time.monotonic() - started_at
 
     assert message is not None
     assert message.text == ""
+    assert 0.04 <= elapsed < 0.25
     logger.warning.assert_called_once_with(
         "sms_text_wait_timeout",
         sms_path=SMS_PATH_1,
-        timeout_seconds=0.001,
+        timeout_seconds=0.05,
     )
     properties.properties.off_properties_changed.assert_called_once()
 
@@ -467,6 +479,88 @@ async def test_read_message_skips_non_inbound_pdu(
     sms.sms.get_number.assert_not_awaited()
     sms.sms.get_text.assert_not_awaited()
     sms.sms.get_timestamp.assert_not_awaited()
+
+
+async def test_read_message_subscribes_before_first_read(
+    fake_bus: MagicMock,
+) -> None:
+    calls: list[str] = []
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="message",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+
+    async def get_text() -> str:
+        calls.append("read")
+        return "message"
+
+    def on_properties_changed(callback: object) -> None:
+        assert callable(callback)
+        calls.append("subscribe")
+
+    sms.sms.get_text.side_effect = get_text
+    properties = make_properties_proxy()
+    properties.properties.on_properties_changed.side_effect = on_properties_changed
+    fake_bus.get_proxy_object.side_effect = [sms, properties]
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.01)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    message = await client.read_message(SMS_PATH_1)
+
+    assert message is not None
+    assert message.text == "message"
+    assert calls == ["subscribe", "read"]
+
+
+@pytest.mark.parametrize(
+    "exit_path",
+    ["happy", "polling", "signal", "timeout", "exception"],
+)
+async def test_read_message_unsubscribes_on_all_exit_paths(
+    fake_bus: MagicMock,
+    exit_path: str,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    properties = make_properties_proxy()
+
+    if exit_path == "happy":
+        sms.sms.get_text.return_value = "message"
+    elif exit_path == "polling":
+        sms.sms.get_text.side_effect = ["", "message"]
+    elif exit_path == "signal":
+        sms.sms.get_text.side_effect = ["", "message"]
+
+        def on_properties_changed(callback: object) -> None:
+            assert callable(callback)
+            asyncio.get_running_loop().call_soon(callback, SMS_INTERFACE, {"Text": object()}, [])
+
+        properties.properties.on_properties_changed.side_effect = on_properties_changed
+    elif exit_path == "timeout":
+        sms.sms.get_text.return_value = ""
+    else:
+        sms.sms.get_text.side_effect = DBusError(
+            "org.freedesktop.DBus.Error.ServiceUnknown",
+            "ModemManager restarted",
+        )
+
+    fake_bus.get_proxy_object.side_effect = [sms, properties]
+    client = ModemManagerClient(sms_text_wait_timeout_seconds=0.01)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    if exit_path == "exception":
+        with pytest.raises(Exception, match="failed to read required modem property Text"):
+            await client.read_message(SMS_PATH_1)
+    else:
+        await client.read_message(SMS_PATH_1)
+
+    properties.properties.off_properties_changed.assert_called_once()
 
 
 async def test_read_message_returns_none_when_sms_object_vanishes(
