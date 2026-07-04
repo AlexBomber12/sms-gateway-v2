@@ -576,6 +576,10 @@ class ModemManagerClient:
         self._unsubscribe_all_added_watchers()
         await self._subscribe_missing_added_watchers(modem_path)
 
+    def _prepare_added_watchers_for_modem_path_change(self) -> None:
+        self._unsubscribe_all_added_watchers()
+        self._added_watch_resubscribe_required = bool(self._added_callbacks)
+
     async def _subscribe_missing_added_watchers(self, modem_path: str) -> None:
         self._added_watch_resubscribe_required = bool(self._added_callbacks)
         for callback_key, callback in self._added_callbacks.items():
@@ -712,6 +716,7 @@ class ModemManagerClient:
             )
             self._modem_path = None
             refreshed_path = await self.find_modem()
+            self._prepare_added_watchers_for_modem_path_change()
             refreshed_path, proxy = await self._get_proxy_object(object_kind, refreshed_path)
             refreshed_interfaces = self._get_modem_interfaces_from_fresh_proxy(
                 interface_names,
@@ -769,6 +774,7 @@ class ModemManagerClient:
             )
             self._modem_path = None
             refreshed_path = await self.find_modem()
+            self._prepare_added_watchers_for_modem_path_change()
             refreshed_path, proxy = await self._get_proxy_object("messaging object", refreshed_path)
             messaging = self._get_proxy_interface(
                 proxy,

@@ -249,6 +249,52 @@ async def test_message_added_subscription_follows_modem_path_after_refresh(
     assert received_paths == [SMS_PATH]
 
 
+async def test_message_added_subscription_rebinds_after_partial_refresh_failure(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    stale_modem_proxy = MagicMock()
+    stale_modem_proxy.get_interface.side_effect = InterfaceNotFoundError(MODEM_INTERFACE)
+    partial_refreshed_proxy = MagicMock()
+    partial_refreshed_proxy.get_interface.side_effect = InterfaceNotFoundError(MODEM_INTERFACE)
+    refreshed_messaging_proxy = make_fake_messaging_proxy()
+    fake_bus.get_proxy_object.side_effect = [
+        fake_messaging_proxy,
+        stale_modem_proxy,
+        partial_refreshed_proxy,
+        refreshed_messaging_proxy,
+        fake_modem_proxy,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    callback = AsyncMock()
+
+    async def refresh_modem() -> str:
+        client._modem_path = REFRESHED_MODEM_PATH
+        return REFRESHED_MODEM_PATH
+
+    client.find_modem = AsyncMock(side_effect=refresh_modem)
+
+    await client.watch_added(callback)
+    callback_key = client._callback_key(callback)
+
+    with pytest.raises(ModemManagerUnavailable):
+        await client.get_signal_quality()
+
+    fake_messaging_proxy.messaging.off_added.assert_called_once()
+    assert client._added_watch_resubscribe_required is True
+    assert client._added_watch_keys == set()
+
+    await client.get_signal_quality()
+
+    client.find_modem.assert_awaited_once_with()
+    refreshed_messaging_proxy.messaging.on_added.assert_called_once()
+    assert (REFRESHED_MODEM_PATH, callback_key) in client._added_watch_keys
+    assert client._added_watch_resubscribe_required is False
+
+
 async def test_watch_added_does_not_recursively_refresh_when_messaging_is_unavailable(
     fake_bus: MagicMock,
 ) -> None:
