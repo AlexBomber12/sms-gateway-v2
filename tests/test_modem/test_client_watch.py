@@ -8,6 +8,7 @@ from dbus_fast import DBusError
 from dbus_fast.errors import InterfaceNotFoundError
 
 from sms_gateway_v2.modem import ModemManagerClient
+from sms_gateway_v2.modem.exceptions import ModemManagerUnavailable
 from tests.test_modem.factories import make_fake_messaging_proxy
 
 MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
@@ -208,6 +209,33 @@ async def test_message_added_subscription_follows_modem_path_after_refresh(
     assert (REFRESHED_MODEM_PATH, callback_key) in client._added_watch_keys
     assert (MODEM_PATH, callback_key) not in client._added_watch_keys
     assert received_paths == [SMS_PATH]
+
+
+async def test_watch_added_does_not_recursively_refresh_when_messaging_is_unavailable(
+    fake_bus: MagicMock,
+) -> None:
+    stale_proxy = MagicMock()
+    stale_proxy.get_interface.side_effect = InterfaceNotFoundError(MODEM_INTERFACE)
+    refreshed_proxy = MagicMock()
+    refreshed_proxy.get_interface.side_effect = InterfaceNotFoundError(MODEM_INTERFACE)
+    fake_bus.get_proxy_object.side_effect = [stale_proxy, refreshed_proxy]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def refresh_modem() -> str:
+        client._modem_path = REFRESHED_MODEM_PATH
+        return REFRESHED_MODEM_PATH
+
+    callback = AsyncMock()
+    client.find_modem = AsyncMock(side_effect=refresh_modem)
+
+    with pytest.raises(ModemManagerUnavailable):
+        await client.watch_added(callback)
+
+    client.find_modem.assert_awaited_once_with()
+    assert client._added_watch_keys == set()
+    assert client._added_watch_handlers == {}
 
 
 async def wait_for_watch_tasks(client: ModemManagerClient) -> None:

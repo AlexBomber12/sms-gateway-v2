@@ -545,7 +545,10 @@ class ModemManagerClient:
     ) -> None:
         watch_key = (modem_path, callback_key)
         if watch_key not in self._added_watch_keys:
-            modem_path, messaging = await self._get_messaging_interface(modem_path)
+            modem_path, messaging = await self._get_messaging_interface(
+                modem_path,
+                resubscribe_added_watchers=False,
+            )
             watch_key = (modem_path, callback_key)
             if watch_key not in self._added_watch_keys:
                 handler = self._build_added_handler(modem_path, callback)
@@ -735,11 +738,14 @@ class ModemManagerClient:
     async def _get_messaging_interface(
         self,
         modem_path: str,
+        *,
+        resubscribe_added_watchers: bool = True,
     ) -> tuple[str, MessagingInterface]:
         modem_path, proxy = await self._get_proxy_object(
             "messaging object",
             modem_path,
             refresh_cached_modem=True,
+            resubscribe_added_watchers=resubscribe_added_watchers,
         )
         try:
             messaging = self._get_proxy_interface(
@@ -760,7 +766,8 @@ class ModemManagerClient:
             )
             self._modem_path = None
             refreshed_path = await self.find_modem()
-            await self._resubscribe_added_watchers(refreshed_path)
+            if resubscribe_added_watchers:
+                await self._resubscribe_added_watchers(refreshed_path)
             refreshed_path, proxy = await self._get_proxy_object("messaging object", refreshed_path)
             messaging = self._get_proxy_interface(
                 proxy,
@@ -827,6 +834,7 @@ class ModemManagerClient:
         object_path: str,
         *,
         refresh_cached_modem: bool = False,
+        resubscribe_added_watchers: bool = True,
     ) -> tuple[str, ProxyObject]:
         try:
             return object_path, await self._get_proxy_object_once(object_path)
@@ -839,7 +847,8 @@ class ModemManagerClient:
                 logger.info("modem_path_stale", modem_path=object_path)
                 self._modem_path = None
                 refreshed_path = await self.find_modem()
-                await self._resubscribe_added_watchers(refreshed_path)
+                if resubscribe_added_watchers:
+                    await self._resubscribe_added_watchers(refreshed_path)
                 return await self._get_proxy_object(object_kind, refreshed_path)
             raise ModemManagerUnavailable(f"failed to query {object_kind} {object_path}") from exc
 
