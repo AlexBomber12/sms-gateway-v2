@@ -72,6 +72,44 @@ async def test_watch_added_deduplicates_repeated_bound_method_registration(
     assert receiver.received_paths == [SMS_PATH]
 
 
+async def test_watch_added_rebinds_existing_watchers_when_subscription_refreshes_path(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    stale_proxy = MagicMock()
+    stale_proxy.get_interface.side_effect = InterfaceNotFoundError(MODEM_INTERFACE)
+    refreshed_messaging_proxy = make_fake_messaging_proxy()
+    fake_bus.get_proxy_object.side_effect = [
+        fake_messaging_proxy,
+        stale_proxy,
+        refreshed_messaging_proxy,
+        refreshed_messaging_proxy,
+        refreshed_messaging_proxy,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    first_callback = AsyncMock()
+    second_callback = AsyncMock()
+
+    async def refresh_modem() -> str:
+        client._modem_path = REFRESHED_MODEM_PATH
+        return REFRESHED_MODEM_PATH
+
+    client.find_modem = AsyncMock(side_effect=refresh_modem)
+
+    await client.watch_added(first_callback)
+    await client.watch_added(second_callback)
+
+    first_key = client._callback_key(first_callback)
+    second_key = client._callback_key(second_callback)
+    assert (MODEM_PATH, first_key) not in client._added_watch_keys
+    assert (REFRESHED_MODEM_PATH, first_key) in client._added_watch_keys
+    assert (REFRESHED_MODEM_PATH, second_key) in client._added_watch_keys
+    fake_messaging_proxy.messaging.off_added.assert_called_once()
+    assert refreshed_messaging_proxy.messaging.on_added.call_count == 2
+
+
 async def test_watch_added_ignores_non_received_added_signal(
     fake_bus: MagicMock,
     fake_messaging_proxy: MagicMock,
@@ -142,8 +180,8 @@ async def test_watch_added_resubscribes_after_cached_modem_path_refresh(
     fake_bus.get_proxy_object.side_effect = [
         fake_messaging_proxy,
         object_manager_proxy,
-        refreshed_messaging_proxy,
         fake_modem_proxy,
+        refreshed_messaging_proxy,
     ]
     client = ModemManagerClient()
     client._bus = fake_bus
@@ -178,8 +216,8 @@ async def test_message_added_subscription_follows_modem_path_after_refresh(
     fake_bus.get_proxy_object.side_effect = [
         fake_messaging_proxy,
         stale_modem_proxy,
-        refreshed_messaging_proxy,
         fake_modem_proxy,
+        refreshed_messaging_proxy,
     ]
     client = ModemManagerClient()
     client._bus = fake_bus

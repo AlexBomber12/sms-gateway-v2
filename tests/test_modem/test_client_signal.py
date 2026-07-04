@@ -175,3 +175,35 @@ async def test_unknown_object_error_path_still_triggers_refresh(
     assert signal.percent == 76
     assert signal.recent is True
     assert client._modem_path == REFRESHED_MODEM_PATH
+
+
+async def test_proxy_object_refresh_still_resubscribes_watchers_by_default(
+    fake_bus: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    object_manager = MagicMock()
+    object_manager.call_get_managed_objects = AsyncMock(
+        return_value={REFRESHED_MODEM_PATH: {MODEM_INTERFACE: object()}}
+    )
+    object_manager_proxy = MagicMock()
+    object_manager_proxy.get_interface.return_value = object_manager
+    fake_bus.introspect.side_effect = [
+        DBusError(UNKNOWN_OBJECT_ERROR, "stale modem path"),
+        object(),
+        object(),
+    ]
+    fake_bus.get_proxy_object.side_effect = [object_manager_proxy, fake_modem_proxy]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    client._resubscribe_added_watchers = AsyncMock()
+
+    modem_path, proxy = await client._get_proxy_object(
+        "modem object",
+        MODEM_PATH,
+        refresh_cached_modem=True,
+    )
+
+    assert modem_path == REFRESHED_MODEM_PATH
+    assert proxy is fake_modem_proxy
+    client._resubscribe_added_watchers.assert_awaited_once_with(REFRESHED_MODEM_PATH)

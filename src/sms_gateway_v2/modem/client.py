@@ -545,10 +545,7 @@ class ModemManagerClient:
     ) -> None:
         watch_key = (modem_path, callback_key)
         if watch_key not in self._added_watch_keys:
-            modem_path, messaging = await self._get_messaging_interface(
-                modem_path,
-                resubscribe_added_watchers=False,
-            )
+            modem_path, messaging = await self._get_messaging_interface(modem_path)
             watch_key = (modem_path, callback_key)
             if watch_key not in self._added_watch_keys:
                 handler = self._build_added_handler(modem_path, callback)
@@ -671,17 +668,22 @@ class ModemManagerClient:
         object_kind: str = "modem object",
     ) -> tuple[str, tuple[object, ...]]:
         modem_path = await self._ensure_modem_path()
+        requested_modem_path = modem_path
         modem_path, proxy = await self._get_proxy_object(
             object_kind,
             modem_path,
             refresh_cached_modem=True,
+            resubscribe_added_watchers=False,
         )
-        return await self._get_modem_interfaces_from_proxy(
+        resolved_path, interfaces = await self._get_modem_interfaces_from_proxy(
             interface_names,
             object_kind,
             modem_path,
             proxy,
         )
+        if resolved_path != requested_modem_path:
+            await self._resubscribe_added_watchers(resolved_path)
+        return resolved_path, interfaces
 
     async def _get_modem_interfaces_from_proxy(
         self,
@@ -710,14 +712,14 @@ class ModemManagerClient:
             )
             self._modem_path = None
             refreshed_path = await self.find_modem()
-            await self._resubscribe_added_watchers(refreshed_path)
             refreshed_path, proxy = await self._get_proxy_object(object_kind, refreshed_path)
-            return self._get_modem_interfaces_from_fresh_proxy(
+            refreshed_interfaces = self._get_modem_interfaces_from_fresh_proxy(
                 interface_names,
                 object_kind,
                 refreshed_path,
                 proxy,
             )
+            return refreshed_interfaces
         return modem_path, tuple(interfaces)
 
     def _get_modem_interfaces_from_fresh_proxy(
@@ -741,11 +743,12 @@ class ModemManagerClient:
         *,
         resubscribe_added_watchers: bool = True,
     ) -> tuple[str, MessagingInterface]:
+        requested_modem_path = modem_path
         modem_path, proxy = await self._get_proxy_object(
             "messaging object",
             modem_path,
             refresh_cached_modem=True,
-            resubscribe_added_watchers=resubscribe_added_watchers,
+            resubscribe_added_watchers=False,
         )
         try:
             messaging = self._get_proxy_interface(
@@ -766,8 +769,6 @@ class ModemManagerClient:
             )
             self._modem_path = None
             refreshed_path = await self.find_modem()
-            if resubscribe_added_watchers:
-                await self._resubscribe_added_watchers(refreshed_path)
             refreshed_path, proxy = await self._get_proxy_object("messaging object", refreshed_path)
             messaging = self._get_proxy_interface(
                 proxy,
@@ -775,7 +776,11 @@ class ModemManagerClient:
                 refreshed_path,
                 MESSAGING_INTERFACE,
             )
+            if resubscribe_added_watchers:
+                await self._resubscribe_added_watchers(refreshed_path)
             return refreshed_path, cast(MessagingInterface, messaging)
+        if modem_path != requested_modem_path and resubscribe_added_watchers:
+            await self._resubscribe_added_watchers(modem_path)
         return modem_path, cast(
             MessagingInterface,
             messaging,
