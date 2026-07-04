@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dbus_fast import DBusError
+from dbus_fast.errors import InterfaceNotFoundError
 
 from sms_gateway_v2.modem import MessageDeleteFailed, ModemManagerClient, ModemManagerUnavailable
 
@@ -14,6 +15,7 @@ REFRESHED_MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/1"
 SMS_PATH_1 = "/org/freedesktop/ModemManager1/SMS/1"
 SMS_PATH_2 = "/org/freedesktop/ModemManager1/SMS/2"
 SMS_PATH_10 = "/org/freedesktop/ModemManager1/SMS/10"
+MESSAGING_INTERFACE = "org.freedesktop.ModemManager1.Modem.Messaging"
 SMS_INTERFACE = "org.freedesktop.ModemManager1.Sms"
 
 
@@ -272,6 +274,67 @@ async def test_list_messages_refreshes_stale_cached_modem_path(
     assert messages == []
     assert client._modem_path == REFRESHED_MODEM_PATH
     fake_messaging_proxy.messaging.get_messages.assert_awaited_once_with()
+
+
+async def test_list_messages_recovers_from_interface_not_found_on_cached_path(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    stale_proxy = MagicMock()
+    stale_proxy.get_interface.side_effect = InterfaceNotFoundError(MESSAGING_INTERFACE)
+    fake_bus.get_proxy_object.side_effect = [stale_proxy, fake_messaging_proxy]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def refresh_modem() -> str:
+        client._modem_path = REFRESHED_MODEM_PATH
+        return REFRESHED_MODEM_PATH
+
+    client.find_modem = AsyncMock(side_effect=refresh_modem)
+
+    messages = await client.list_messages()
+
+    assert messages == []
+    assert client._modem_path == REFRESHED_MODEM_PATH
+    client.find_modem.assert_awaited_once_with()
+    fake_messaging_proxy.messaging.get_messages.assert_awaited_once_with()
+
+
+async def test_list_messages_does_not_recover_when_interface_error_is_not_stale(
+    fake_bus: MagicMock,
+) -> None:
+    error = DBusError("org.freedesktop.DBus.Error.Failed", "lookup failed")
+    stale_proxy = MagicMock()
+    stale_proxy.get_interface.side_effect = error
+    fake_bus.get_proxy_object.return_value = stale_proxy
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    client.find_modem = AsyncMock(return_value=REFRESHED_MODEM_PATH)
+
+    with pytest.raises(ModemManagerUnavailable) as exc:
+        await client.list_messages()
+
+    assert exc.value.__cause__ is error
+    client.find_modem.assert_not_awaited()
+
+
+async def test_list_messages_does_not_recover_when_path_is_not_cached(
+    fake_bus: MagicMock,
+) -> None:
+    stale_proxy = MagicMock()
+    stale_proxy.get_interface.side_effect = InterfaceNotFoundError(MESSAGING_INTERFACE)
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    client._get_proxy_object = AsyncMock(return_value=(REFRESHED_MODEM_PATH, stale_proxy))
+    client.find_modem = AsyncMock(return_value=REFRESHED_MODEM_PATH)
+
+    with pytest.raises(ModemManagerUnavailable):
+        await client.list_messages()
+
+    client.find_modem.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -664,6 +727,30 @@ async def test_delete_message_succeeds_silently_on_happy_path(
 
     await client.delete_message(SMS_PATH_1)
 
+    fake_messaging_proxy.messaging.call_delete.assert_awaited_once_with(SMS_PATH_1)
+
+
+async def test_delete_message_recovers_from_interface_not_found_on_cached_path(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    stale_proxy = MagicMock()
+    stale_proxy.get_interface.side_effect = InterfaceNotFoundError(MESSAGING_INTERFACE)
+    fake_bus.get_proxy_object.side_effect = [stale_proxy, fake_messaging_proxy]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def refresh_modem() -> str:
+        client._modem_path = REFRESHED_MODEM_PATH
+        return REFRESHED_MODEM_PATH
+
+    client.find_modem = AsyncMock(side_effect=refresh_modem)
+
+    await client.delete_message(SMS_PATH_1)
+
+    assert client._modem_path == REFRESHED_MODEM_PATH
+    client.find_modem.assert_awaited_once_with()
     fake_messaging_proxy.messaging.call_delete.assert_awaited_once_with(SMS_PATH_1)
 
 

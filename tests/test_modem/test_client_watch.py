@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dbus_fast import DBusError
+from dbus_fast.errors import InterfaceNotFoundError
 
 from sms_gateway_v2.modem import ModemManagerClient
 from tests.test_modem.factories import make_fake_messaging_proxy
@@ -162,6 +163,50 @@ async def test_watch_added_resubscribes_after_cached_modem_path_refresh(
     fake_messaging_proxy.messaging.on_added.assert_called_once()
     refreshed_messaging_proxy.messaging.on_added.assert_called_once()
     assert client._modem_path == REFRESHED_MODEM_PATH
+    assert received_paths == [SMS_PATH]
+
+
+async def test_message_added_subscription_follows_modem_path_after_refresh(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    stale_modem_proxy = MagicMock()
+    stale_modem_proxy.get_interface.side_effect = InterfaceNotFoundError(MODEM_INTERFACE)
+    refreshed_messaging_proxy = make_fake_messaging_proxy()
+    fake_bus.get_proxy_object.side_effect = [
+        fake_messaging_proxy,
+        stale_modem_proxy,
+        refreshed_messaging_proxy,
+        fake_modem_proxy,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    received_paths: list[str] = []
+    signal_received = asyncio.Event()
+
+    async def callback(sms_path: str) -> None:
+        received_paths.append(sms_path)
+        signal_received.set()
+
+    async def refresh_modem() -> str:
+        client._modem_path = REFRESHED_MODEM_PATH
+        return REFRESHED_MODEM_PATH
+
+    client.find_modem = AsyncMock(side_effect=refresh_modem)
+
+    await client.watch_added(callback)
+    callback_key = client._callback_key(callback)
+    await client.get_signal_quality()
+    refreshed_messaging_proxy.messaging.added_handler(SMS_PATH, True)
+    await asyncio.wait_for(signal_received.wait(), timeout=1)
+    await wait_for_watch_tasks(client)
+
+    fake_messaging_proxy.messaging.on_added.assert_called_once()
+    refreshed_messaging_proxy.messaging.on_added.assert_called_once()
+    assert (REFRESHED_MODEM_PATH, callback_key) in client._added_watch_keys
+    assert (MODEM_PATH, callback_key) not in client._added_watch_keys
     assert received_paths == [SMS_PATH]
 
 

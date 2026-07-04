@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dbus_fast import DBusError
-from dbus_fast.errors import InterfaceNotFoundError
 
 from sms_gateway_v2.modem import (
     ModemError,
@@ -23,7 +22,7 @@ def configure_info_proxies(
     fake_modem_proxy: MagicMock,
     fake_sim_proxy: MagicMock,
 ) -> None:
-    fake_bus.get_proxy_object.side_effect = [fake_modem_proxy, fake_sim_proxy]
+    fake_bus.get_proxy_object.side_effect = [fake_modem_proxy, fake_modem_proxy, fake_sim_proxy]
 
 
 async def test_get_modem_info_returns_fully_populated_modem_info(
@@ -248,7 +247,7 @@ async def test_get_modem_info_wraps_modem_interface_lookup_failures(
     fake_sim_proxy: MagicMock,
 ) -> None:
     configure_info_proxies(fake_bus, fake_modem_proxy, fake_sim_proxy)
-    error = InterfaceNotFoundError("org.freedesktop.ModemManager1.Modem.Modem3gpp")
+    error = DBusError("org.freedesktop.DBus.Error.Failed", "lookup failed")
 
     def get_interface(interface_name: str) -> object:
         if interface_name == "org.freedesktop.ModemManager1.Modem.Modem3gpp":
@@ -275,7 +274,7 @@ async def test_get_modem_info_wraps_sim_lookup_failures(
     fake_sim_proxy: MagicMock,
 ) -> None:
     error = DBusError("org.freedesktop.DBus.Error.UnknownObject", "SIM vanished")
-    fake_bus.introspect.side_effect = [object(), error]
+    fake_bus.introspect.side_effect = [object(), object(), error]
     configure_info_proxies(fake_bus, fake_modem_proxy, fake_sim_proxy)
     client = ModemManagerClient()
     client._bus = fake_bus
