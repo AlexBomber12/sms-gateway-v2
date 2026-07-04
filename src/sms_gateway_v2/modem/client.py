@@ -259,9 +259,11 @@ class ModemManagerClient:
 
     async def get_modem_info(self) -> ModemInfo:
         started_at = time.monotonic()
-        modem_path, modem = await self._get_modem_interface(MODEM_INTERFACE)
+        modem_path, interfaces = await self._get_modem_interfaces(
+            (MODEM_INTERFACE, MODEM_3GPP_INTERFACE)
+        )
+        modem, modem_3gpp = interfaces
         modem = cast(ModemInterface, modem)
-        modem_path, modem_3gpp = await self._get_modem_interface(MODEM_3GPP_INTERFACE)
         modem_3gpp = cast(
             Modem3gppInterface,
             modem_3gpp,
@@ -657,14 +659,42 @@ class ModemManagerClient:
         *,
         object_kind: str = "modem object",
     ) -> tuple[str, object]:
+        modem_path, interfaces = await self._get_modem_interfaces((interface_name,), object_kind)
+        return modem_path, interfaces[0]
+
+    async def _get_modem_interfaces(
+        self,
+        interface_names: tuple[str, ...],
+        object_kind: str = "modem object",
+    ) -> tuple[str, tuple[object, ...]]:
         modem_path = await self._ensure_modem_path()
         modem_path, proxy = await self._get_proxy_object(
             object_kind,
             modem_path,
             refresh_cached_modem=True,
         )
+        return await self._get_modem_interfaces_from_proxy(
+            interface_names,
+            object_kind,
+            modem_path,
+            proxy,
+        )
+
+    async def _get_modem_interfaces_from_proxy(
+        self,
+        interface_names: tuple[str, ...],
+        object_kind: str,
+        modem_path: str,
+        proxy: ProxyObject,
+    ) -> tuple[str, tuple[object, ...]]:
+        interfaces: list[object] = []
+        failing_interface_name = ""
         try:
-            interface = self._get_proxy_interface(proxy, object_kind, modem_path, interface_name)
+            for interface_name in interface_names:
+                failing_interface_name = interface_name
+                interfaces.append(
+                    self._get_proxy_interface(proxy, object_kind, modem_path, interface_name)
+                )
         except ModemManagerUnavailable as exc:
             if not self._is_stale_modem_path_unavailable(exc):
                 raise
@@ -673,20 +703,34 @@ class ModemManagerClient:
             logger.info(
                 "modem_interface_stale",
                 modem_path=modem_path,
-                interface_name=interface_name,
+                interface_name=failing_interface_name,
             )
             self._modem_path = None
             refreshed_path = await self.find_modem()
             await self._resubscribe_added_watchers(refreshed_path)
             refreshed_path, proxy = await self._get_proxy_object(object_kind, refreshed_path)
-            interface = self._get_proxy_interface(
-                proxy,
+            return self._get_modem_interfaces_from_fresh_proxy(
+                interface_names,
                 object_kind,
                 refreshed_path,
-                interface_name,
+                proxy,
             )
-            return refreshed_path, interface
-        return modem_path, interface
+        return modem_path, tuple(interfaces)
+
+    def _get_modem_interfaces_from_fresh_proxy(
+        self,
+        interface_names: tuple[str, ...],
+        object_kind: str,
+        modem_path: str,
+        proxy: ProxyObject,
+    ) -> tuple[str, tuple[object, ...]]:
+        return (
+            modem_path,
+            tuple(
+                self._get_proxy_interface(proxy, object_kind, modem_path, interface_name)
+                for interface_name in interface_names
+            ),
+        )
 
     async def _get_messaging_interface(
         self,
