@@ -28,7 +28,13 @@ _REGISTERED_REGISTRATION_STATES = frozenset(
         RegistrationState.ROAMING_CSFB_NOT_PREFERRED,
     }
 )
-_BAD_REGISTRATION_STATES = frozenset(RegistrationState) - _REGISTERED_REGISTRATION_STATES
+_BAD_REGISTRATION_STATES = frozenset(
+    {
+        RegistrationState.DENIED,
+        RegistrationState.SEARCHING,
+        RegistrationState.UNKNOWN,
+    }
+)
 
 
 class ModemWatchdog:

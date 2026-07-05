@@ -234,6 +234,32 @@ async def test_first_bad_state_sets_since_marker_without_resetting(
     modem_client.reset.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "registration",
+    [
+        RegistrationState.IDLE,
+        RegistrationState.EMERGENCY_ONLY,
+        RegistrationState.ATTACHED_RLOS,
+    ],
+)
+async def test_non_registered_health_states_do_not_trigger_bad_state_reset(
+    watchdog: ModemWatchdog,
+    modem_client: MagicMock,
+    registration: RegistrationState,
+) -> None:
+    _set_health_reads(
+        modem_client,
+        signal=_signal(80),
+        registration=registration,
+    )
+    watchdog._bad_state_since = datetime.now(UTC) - timedelta(minutes=15)
+
+    await watchdog._poll_once()
+
+    assert watchdog._bad_state_since is None
+    modem_client.reset.assert_not_awaited()
+
+
 async def test_reset_failure_does_not_terminate_watchdog_loop(
     watchdog: ModemWatchdog,
     modem_client: MagicMock,
