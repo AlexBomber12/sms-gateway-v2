@@ -28,6 +28,7 @@ class QueueItem(BaseModel):
     content_hash: str | None = None
     attempts: int = 0
     last_attempt_at: datetime | None = None
+    permanently_failed: bool = False
     next_retry_at: datetime | None = None
 
     @field_validator("content_hash")

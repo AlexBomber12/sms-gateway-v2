@@ -90,7 +90,7 @@ class DeliveryWorker:
                 error=str(exc),
             )
             self._metrics.sms_failed_total.inc()
-            await self._queue.mark_failed(item)
+            await self._queue.mark_failed(item, permanently_failed=True)
             return True
         except TelegramAuthError:
             logger.warning(
@@ -103,7 +103,7 @@ class DeliveryWorker:
             self._metrics.sms_failed_total.inc()
             self._metrics.telegram_send_total.labels(result="failure").inc()
             self._metrics.telegram_send_failures_total.labels(reason="auth_error").inc()
-            await self._queue.mark_failed(item)
+            await self._queue.mark_failed(item, permanently_failed=True)
             return True
         except TelegramRateLimited as exc:
             return await self._handle_recoverable_delivery_failure(
@@ -129,7 +129,7 @@ class DeliveryWorker:
             self._metrics.sms_failed_total.inc()
             self._metrics.telegram_send_total.labels(result="failure").inc()
             self._metrics.telegram_send_failures_total.labels(reason="exhausted").inc()
-            await self._queue.mark_failed(item)
+            await self._queue.mark_failed(item, permanently_failed=True)
             return True
         except Exception as exc:
             logger.exception(
@@ -190,7 +190,7 @@ class DeliveryWorker:
             self._metrics.sms_failed_total.inc()
             self._metrics.telegram_send_total.labels(result="failure").inc()
             self._metrics.telegram_send_failures_total.labels(reason="exhausted").inc()
-            await self._queue.mark_failed(item)
+            await self._queue.mark_failed(item, permanently_failed=True)
             return True
 
         delay_seconds = float(self._retry_schedule_seconds[item.attempts])

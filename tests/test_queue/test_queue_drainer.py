@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import ANY, MagicMock
 
 import aiosqlite
 import pytest
 
 from sms_gateway_v2.modem import IncomingSms
 from sms_gateway_v2.queue import ItemStatus, Queue, QueueItem
-from sms_gateway_v2.queue.paths import atomic_move, atomic_write_json
+from sms_gateway_v2.queue.paths import atomic_move, atomic_write_json, load_item
 from tests.test_queue.helpers import content_hash
 
 
@@ -81,6 +83,57 @@ async def test_requeue_failed_moves_young_failed_items_back_to_pending(
     assert not (queue._dirs["failed"] / f"{item.id}.json").exists()
     assert item.content_hash is not None
     assert await dedup_status(state_dir / "dedup.db", item.content_hash) == ItemStatus.PENDING.value
+
+
+async def test_requeue_failed_skips_permanent_items(
+    monkeypatch: pytest.MonkeyPatch,
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    permanent = await queue.enqueue(sample_sms.model_copy(update={"text": "permanent"}))
+    transient = await queue.enqueue(sample_sms.model_copy(update={"text": "transient"}))
+    assert permanent is not None
+    assert transient is not None
+    claimed_permanent = await queue.claim_next()
+    assert claimed_permanent == permanent
+    await queue.mark_failed(claimed_permanent, permanently_failed=True)
+    claimed_transient = await queue.claim_next()
+    assert claimed_transient == transient
+    await queue.mark_failed(claimed_transient)
+    logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.queue.queue.logger", logger)
+
+    requeued = await queue.requeue_failed(max_age_days=30)
+
+    permanent_path = queue._dirs["failed"] / f"{permanent.id}.json"
+    assert requeued == 1
+    assert permanent_path.exists()
+    assert (queue._dirs["pending"] / f"{transient.id}.json").exists()
+    assert not (queue._dirs["failed"] / f"{transient.id}.json").exists()
+    logger.info.assert_any_call(
+        "queue_failed_item_skipped_permanent",
+        item_id=permanent.id,
+        path=str(permanent_path),
+        elapsed_ms=ANY,
+    )
+
+
+async def test_requeue_failed_backward_compat_with_missing_flag(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    item = await enqueue_claim_and_mark_failed(queue, sample_sms)
+    path = queue._dirs["failed"] / f"{item.id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["permanently_failed"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    requeued = await queue.requeue_failed(max_age_days=30)
+
+    assert requeued == 1
+    assert (queue._dirs["pending"] / f"{item.id}.json").exists()
+    assert not path.exists()
+    assert load_item(queue._dirs["pending"] / f"{item.id}.json").permanently_failed is False
 
 
 async def test_requeue_failed_leaves_old_failed_items_alone(
