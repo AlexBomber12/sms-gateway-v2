@@ -56,9 +56,9 @@ async def test_invalid_queued_sms_moves_item_to_failed_without_sending(
     assert (queue._dirs["failed"] / f"{item.id}.json").exists()
     assert not (queue._dirs["processing"] / f"{item.id}.json").exists()
     assert metric_value(metrics, "sms_failed_total") == 1.0
-    assert metric_value(metrics, "telegram_send_total", {"result": "failure"}) == 1.0
+    assert metric_value(metrics, "telegram_send_total", {"result": "failure"}) == 0.0
     assert (
-        metric_value(metrics, "telegram_send_failures_total", {"reason": "invalid_message"}) == 1.0
+        metric_value(metrics, "telegram_send_failures_total", {"reason": "invalid_message"}) == 0.0
     )
     telegram_client.send_message.assert_not_awaited()
     logger.warning.assert_called_once()
