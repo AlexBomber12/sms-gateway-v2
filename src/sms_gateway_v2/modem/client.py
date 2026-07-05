@@ -30,6 +30,8 @@ from dbus_fast.errors import (
 from sms_gateway_v2.config import get_settings
 from sms_gateway_v2.modem.exceptions import (
     MessageDeleteFailed,
+    MessageReadMissing,
+    MessageReadSkipped,
     ModemError,
     ModemManagerUnavailable,
     ModemNotFound,
@@ -432,14 +434,14 @@ class ModemManagerClient:
 
         Some modems expose the SMS object and emit MessageAdded before ModemManager's async
         decoder has populated the Text property. This waits briefly for the Text property
-        change before returning, while still allowing degraded empty-body delivery on timeout.
+        change before returning, and returns None if Text remains empty after the timeout.
         """
         try:
             sms = await self._get_sms_interface(sms_path)
         except ModemManagerUnavailable as exc:
             if self._is_unknown_object_unavailable(exc):
                 logger.info("message_read_missing", sms_path=sms_path)
-                return None
+                raise MessageReadMissing(f"SMS object disappeared before read: {sms_path}") from exc
             raise
         pdu_type = self._decode_pdu_type(await self._read_required("PduType", sms.get_pdu_type))
         if pdu_type not in INBOUND_SMS_PDU_TYPES:
@@ -448,7 +450,7 @@ class ModemManagerClient:
                 sms_path=sms_path,
                 pdu_type=pdu_type,
             )
-            return None
+            raise MessageReadSkipped(f"SMS object is not inbound: {sms_path}")
 
         timeout_seconds = self._sms_text_wait_timeout_seconds
         if timeout_seconds is None:
@@ -483,6 +485,9 @@ class ModemManagerClient:
                     )
             finally:
                 properties.off_properties_changed(handle_properties_changed)
+
+        if text == "":
+            return None
 
         message = IncomingSms(
             object_path=sms_path,

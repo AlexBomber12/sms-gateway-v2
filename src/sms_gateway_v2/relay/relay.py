@@ -7,10 +7,13 @@ from datetime import UTC, datetime
 
 import structlog
 
+from sms_gateway_v2.config import get_settings
 from sms_gateway_v2.metrics import MetricsRegistry
 from sms_gateway_v2.modem import (
     IncomingSms,
     MessageDeleteFailed,
+    MessageReadMissing,
+    MessageReadSkipped,
     ModemManagerClient,
 )
 from sms_gateway_v2.queue import Queue
@@ -44,6 +47,8 @@ class SmsRelay:
         self._worker_task: asyncio.Task[None] | None = None
         self._lifecycle_lock: asyncio.Lock = asyncio.Lock()
         self._sms_handler_lock: asyncio.Lock = asyncio.Lock()
+        self._pending_text_retries: dict[str, asyncio.Task[None]] = {}
+        self._sleep = asyncio.sleep
 
     @property
     def telegram_client(self) -> TelegramClient:
@@ -113,6 +118,7 @@ class SmsRelay:
         self._status = "stopping"
         stop_error: Exception | None = None
         try:
+            await self._cancel_pending_text_retries()
             self._worker.stop()
             await self._wait_for_worker_shutdown()
             stop_error = await self._disconnect_and_close()
@@ -175,7 +181,7 @@ class SmsRelay:
         messages = await self._modem_client.list_messages()
         for message in messages:
             async with self._sms_handler_lock:
-                await self._process_sms(message, fail_on_delete_error=True)
+                await self._process_sms_path(message.object_path, fail_on_delete_error=True)
         logger.info("relay_drain_completed", count_drained=len(messages))
 
     def state(self) -> RelayState:
@@ -187,12 +193,127 @@ class SmsRelay:
         )
 
     async def _process_sms_path(self, sms_path: str, *, fail_on_delete_error: bool) -> None:
-        sms = await self._modem_client.read_message(sms_path)
+        try:
+            sms = await self._modem_client.read_message(sms_path)
+        except MessageReadMissing as exc:
+            logger.info(
+                "relay_sms_read_missing",
+                sms_path=sms_path,
+                error=str(exc),
+            )
+            return
+        except MessageReadSkipped as exc:
+            logger.info(
+                "relay_sms_read_skipped",
+                sms_path=sms_path,
+                error=str(exc),
+            )
+            return
         if sms is None:
-            logger.warning("relay_sms_path_not_found", sms_path=sms_path)
+            self._schedule_text_retry(sms_path)
             return
 
         await self._process_sms(sms, fail_on_delete_error=fail_on_delete_error)
+
+    def _schedule_text_retry(self, sms_path: str) -> None:
+        if sms_path in self._pending_text_retries:
+            return
+
+        task = asyncio.create_task(self._retry_undecoded_sms_text(sms_path))
+        self._pending_text_retries[sms_path] = task
+        task.add_done_callback(lambda done_task: self._handle_text_retry_done(sms_path, done_task))
+
+    def _handle_text_retry_done(self, sms_path: str, task: asyncio.Future[None]) -> None:
+        if self._pending_text_retries.get(sms_path) is task:
+            self._pending_text_retries.pop(sms_path, None)
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as exc:
+            self._last_error = str(exc)
+            logger.exception(
+                "sms_text_undecoded_retry_failed",
+                sms_path=sms_path,
+                error=str(exc),
+            )
+
+    async def _retry_undecoded_sms_text(self, sms_path: str) -> None:
+        settings = get_settings()
+        max_attempts = settings.modem_sms_text_undecoded_retry_max_attempts
+        delay_seconds = settings.modem_sms_text_undecoded_retry_delay_seconds
+        started_at = time.monotonic()
+
+        for attempt in range(1, max_attempts + 1):
+            logger.info(
+                "sms_text_undecoded_retry_scheduled",
+                sms_path=sms_path,
+                attempt=attempt,
+                delay_seconds=delay_seconds,
+            )
+            await self._sleep(delay_seconds)
+            async with self._sms_handler_lock:
+                try:
+                    sms = await self._modem_client.read_message(sms_path)
+                except MessageReadMissing as exc:
+                    logger.info(
+                        "sms_text_undecoded_retry_missing",
+                        sms_path=sms_path,
+                        attempts_used=attempt,
+                        total_wait_seconds=time.monotonic() - started_at,
+                        error=str(exc),
+                    )
+                    return
+                except MessageReadSkipped as exc:
+                    logger.info(
+                        "sms_text_undecoded_retry_skipped",
+                        sms_path=sms_path,
+                        attempts_used=attempt,
+                        total_wait_seconds=time.monotonic() - started_at,
+                        error=str(exc),
+                    )
+                    return
+                if sms is None:
+                    continue
+                await self._process_sms(sms, fail_on_delete_error=False)
+                logger.info(
+                    "sms_text_undecoded_retry_recovered",
+                    sms_path=sms_path,
+                    attempts_used=attempt,
+                    total_wait_seconds=time.monotonic() - started_at,
+                )
+                return
+
+        self._metrics.sms_text_undecoded_total.inc()
+        logger.error(
+            "sms_text_undecodable",
+            sms_path=sms_path,
+            total_wait_seconds=time.monotonic() - started_at,
+            attempts_used=max_attempts,
+        )
+        await self._delete_undecodable_sms(sms_path)
+
+    async def _delete_undecodable_sms(self, sms_path: str) -> None:
+        try:
+            await self._modem_client.delete_message(sms_path)
+        except MessageDeleteFailed as exc:
+            logger.warning(
+                "relay_sms_delete_failed",
+                sms_path=sms_path,
+                error=str(exc),
+            )
+
+    async def _cancel_pending_text_retries(self) -> None:
+        tasks = list(self._pending_text_retries.values())
+        if not tasks:
+            return
+
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError, Exception):
+                await task
+        self._pending_text_retries.clear()
 
     async def _process_sms(self, sms: IncomingSms, *, fail_on_delete_error: bool) -> None:
         sms_path = sms.object_path
@@ -230,6 +351,7 @@ class SmsRelay:
         queue_initialized: bool,
     ) -> None:
         self._last_error = str(exc)
+        await self._cancel_pending_text_retries()
         if connected:
             with suppress(Exception):
                 await self._modem_client.disconnect()

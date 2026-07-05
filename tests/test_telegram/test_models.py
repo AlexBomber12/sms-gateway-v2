@@ -70,6 +70,12 @@ def test_from_sms_html_escapes_number_and_text() -> None:
     assert message.parse_mode == "HTML"
 
 
+@pytest.mark.parametrize("text", ["", "   ", "\n\t"])
+def test_telegram_message_from_sms_rejects_empty_text(text: str) -> None:
+    with pytest.raises(ValidationError, match="SMS text is empty"):
+        TelegramMessage.from_sms(chat_id="123", number="900", text=text)
+
+
 def test_from_sms_truncates_with_ellipsis_at_telegram_limit() -> None:
     message = TelegramMessage.from_sms(chat_id="123", number="+15551234567", text="x" * 5000)
 

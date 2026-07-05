@@ -26,6 +26,8 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.delenv("METRICS_PATH", raising=False)
     monkeypatch.delenv("SMS_GATEWAY_GROUP_GID", raising=False)
     monkeypatch.delenv("MODEM_SMS_TEXT_WAIT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("MODEM_SMS_TEXT_UNDECODED_RETRY_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", raising=False)
     monkeypatch.delenv("MODEM_RESET_REAPPEAR_TIMEOUT_SECONDS", raising=False)
 
     settings = Settings()
@@ -46,6 +48,8 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.metrics_path == "/metrics"
     assert settings.sms_gateway_group_gid == ""
     assert settings.modem_sms_text_wait_timeout_seconds == 5.0
+    assert settings.modem_sms_text_undecoded_retry_max_attempts == 3
+    assert settings.modem_sms_text_undecoded_retry_delay_seconds == 30.0
     assert settings.modem_reset_reappear_timeout_seconds == 45.0
     assert settings.dedup_db_path == Path("./state/dedup.db")
 
@@ -71,6 +75,8 @@ def test_settings_env_overrides_defaults(
     monkeypatch.setenv("METRICS_PATH", "/custom-metrics")
     monkeypatch.setenv("SMS_GATEWAY_GROUP_GID", "995")
     monkeypatch.setenv("MODEM_SMS_TEXT_WAIT_TIMEOUT_SECONDS", "0.5")
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_MAX_ATTEMPTS", "4")
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "45.5")
     monkeypatch.setenv("MODEM_RESET_REAPPEAR_TIMEOUT_SECONDS", "30.5")
 
     settings = get_settings()
@@ -91,6 +97,8 @@ def test_settings_env_overrides_defaults(
     assert settings.metrics_path == "/custom-metrics"
     assert settings.sms_gateway_group_gid == "995"
     assert settings.modem_sms_text_wait_timeout_seconds == 0.5
+    assert settings.modem_sms_text_undecoded_retry_max_attempts == 4
+    assert settings.modem_sms_text_undecoded_retry_delay_seconds == 45.5
     assert settings.modem_reset_reappear_timeout_seconds == 30.5
     assert settings.dedup_db_path == tmp_path / "custom-state" / "dedup.db"
 

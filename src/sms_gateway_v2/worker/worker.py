@@ -6,6 +6,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
 import structlog
+from pydantic import ValidationError
 
 from sms_gateway_v2.metrics import MetricsRegistry
 from sms_gateway_v2.queue import Queue, QueueItem
@@ -71,14 +72,26 @@ class DeliveryWorker:
             skipped_item_ids.add(item.id)
             await self._queue.move_back_to_pending(item)
 
-        message = TelegramMessage.from_sms(
-            chat_id=self._telegram_chat_id,
-            number=item.sms.number,
-            text=item.sms.text,
-        )
         try:
+            message = TelegramMessage.from_sms(
+                chat_id=self._telegram_chat_id,
+                number=item.sms.number,
+                text=item.sms.text,
+            )
             with self._metrics.telegram_send_duration_seconds.time():
                 await self._telegram_client.send_message(message)
+        except ValidationError as exc:
+            logger.warning(
+                "delivery_failed_permanent",
+                item_id=item.id,
+                attempt=item.attempts,
+                attempts_used=item.attempts + 1,
+                reason="invalid_message",
+                error=str(exc),
+            )
+            self._metrics.sms_failed_total.inc()
+            await self._queue.mark_failed(item)
+            return True
         except TelegramAuthError:
             logger.warning(
                 "delivery_failed_permanent",

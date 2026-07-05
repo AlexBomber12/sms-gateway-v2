@@ -4,7 +4,7 @@ from html import escape
 from html.parser import HTMLParser
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 MAX_TELEGRAM_TEXT_LENGTH = 4096
 TRUNCATION_SUFFIX = "..."
@@ -20,6 +20,19 @@ class TelegramMessage(BaseModel):
 
     @classmethod
     def from_sms(cls, chat_id: str, number: str, text: str) -> Self:
+        if not text or not text.strip():
+            msg = "SMS text is empty; refusing to build TelegramMessage"
+            raise ValidationError.from_exception_data(
+                cls.__name__,
+                [
+                    {
+                        "type": "value_error",
+                        "loc": ("text",),
+                        "input": text,
+                        "ctx": {"error": ValueError(msg)},
+                    }
+                ],
+            )
         body = f"<b>{escape(number)}</b>\n{escape(text)}"
         if _sms_body_length(number, text) > MAX_TELEGRAM_TEXT_LENGTH:
             body = _truncate_sms_body(number, text)
