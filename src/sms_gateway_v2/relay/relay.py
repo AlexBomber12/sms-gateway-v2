@@ -179,7 +179,7 @@ class SmsRelay:
         messages = await self._modem_client.list_messages()
         for message in messages:
             async with self._sms_handler_lock:
-                await self._process_sms(message, fail_on_delete_error=True)
+                await self._process_sms_path(message.object_path, fail_on_delete_error=True)
         logger.info("relay_drain_completed", count_drained=len(messages))
 
     def state(self) -> RelayState:
