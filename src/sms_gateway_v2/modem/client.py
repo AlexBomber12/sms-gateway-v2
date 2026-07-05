@@ -685,7 +685,7 @@ class ModemManagerClient:
             modem_path,
             proxy,
         )
-        if resolved_path != requested_modem_path:
+        if resolved_path != requested_modem_path or self._added_watch_resubscribe_required:
             await self._resubscribe_added_watchers(resolved_path)
         return resolved_path, interfaces
 
