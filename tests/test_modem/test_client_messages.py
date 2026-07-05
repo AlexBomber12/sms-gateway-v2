@@ -8,7 +8,12 @@ import pytest
 from dbus_fast import DBusError
 from dbus_fast.errors import InterfaceNotFoundError
 
-from sms_gateway_v2.modem import MessageDeleteFailed, ModemManagerClient, ModemManagerUnavailable
+from sms_gateway_v2.modem import (
+    MessageDeleteFailed,
+    MessageReadMissing,
+    ModemManagerClient,
+    ModemManagerUnavailable,
+)
 
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
 REFRESHED_MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/1"
@@ -682,7 +687,7 @@ async def test_read_message_unsubscribes_on_all_exit_paths(
     properties.properties.off_properties_changed.assert_called_once()
 
 
-async def test_read_message_returns_none_when_sms_object_vanishes(
+async def test_read_message_raises_missing_when_sms_object_vanishes(
     fake_bus: MagicMock,
 ) -> None:
     error = DBusError("org.freedesktop.DBus.Error.UnknownObject", "SMS vanished")
@@ -691,9 +696,9 @@ async def test_read_message_returns_none_when_sms_object_vanishes(
     client._bus = fake_bus
     client._modem_path = MODEM_PATH
 
-    message = await client.read_message(SMS_PATH_1)
+    with pytest.raises(MessageReadMissing, match=SMS_PATH_1):
+        await client.read_message(SMS_PATH_1)
 
-    assert message is None
     fake_bus.get_proxy_object.assert_not_called()
 
 

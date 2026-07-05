@@ -12,6 +12,7 @@ from sms_gateway_v2.metrics import MetricsRegistry
 from sms_gateway_v2.modem import (
     IncomingSms,
     MessageDeleteFailed,
+    MessageReadMissing,
     ModemManagerClient,
 )
 from sms_gateway_v2.queue import Queue
@@ -191,7 +192,15 @@ class SmsRelay:
         )
 
     async def _process_sms_path(self, sms_path: str, *, fail_on_delete_error: bool) -> None:
-        sms = await self._modem_client.read_message(sms_path)
+        try:
+            sms = await self._modem_client.read_message(sms_path)
+        except MessageReadMissing as exc:
+            logger.info(
+                "relay_sms_read_missing",
+                sms_path=sms_path,
+                error=str(exc),
+            )
+            return
         if sms is None:
             self._schedule_text_retry(sms_path)
             return
@@ -236,7 +245,17 @@ class SmsRelay:
             )
             await self._sleep(delay_seconds)
             async with self._sms_handler_lock:
-                sms = await self._modem_client.read_message(sms_path)
+                try:
+                    sms = await self._modem_client.read_message(sms_path)
+                except MessageReadMissing as exc:
+                    logger.info(
+                        "sms_text_undecoded_retry_missing",
+                        sms_path=sms_path,
+                        attempts_used=attempt,
+                        total_wait_seconds=time.monotonic() - started_at,
+                        error=str(exc),
+                    )
+                    return
                 if sms is None:
                     continue
                 await self._process_sms(sms, fail_on_delete_error=False)

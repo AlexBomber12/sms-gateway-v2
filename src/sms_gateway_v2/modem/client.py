@@ -30,6 +30,7 @@ from dbus_fast.errors import (
 from sms_gateway_v2.config import get_settings
 from sms_gateway_v2.modem.exceptions import (
     MessageDeleteFailed,
+    MessageReadMissing,
     ModemError,
     ModemManagerUnavailable,
     ModemNotFound,
@@ -439,7 +440,7 @@ class ModemManagerClient:
         except ModemManagerUnavailable as exc:
             if self._is_unknown_object_unavailable(exc):
                 logger.info("message_read_missing", sms_path=sms_path)
-                return None
+                raise MessageReadMissing(f"SMS object disappeared before read: {sms_path}") from exc
             raise
         pdu_type = self._decode_pdu_type(await self._read_required("PduType", sms.get_pdu_type))
         if pdu_type not in INBOUND_SMS_PDU_TYPES:
