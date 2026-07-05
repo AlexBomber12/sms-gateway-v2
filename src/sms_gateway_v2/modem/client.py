@@ -443,6 +443,12 @@ class ModemManagerClient:
         messages.sort(key=self._message_sort_key)
         return messages
 
+    async def list_sms_paths(self) -> list[str]:
+        modem_path = await self._ensure_modem_path()
+        _, messaging = await self._get_messaging_interface(modem_path)
+        sms_paths = await self._read_required("Messages", messaging.get_messages)
+        return sorted(sms_paths, key=self._sms_path_sort_key)
+
     async def read_message(self, sms_path: str) -> IncomingSms | None:
         """Read one SMS by path, waiting for delayed Text population after MessageAdded.
 
@@ -745,6 +751,11 @@ class ModemManagerClient:
         suffix = message.object_path.rsplit("/", maxsplit=1)[-1]
         path_index = int(suffix) if suffix.isdecimal() else -1
         return (1, float(path_index), message.object_path)
+
+    def _sms_path_sort_key(self, sms_path: str) -> tuple[float, str]:
+        suffix = sms_path.rsplit("/", maxsplit=1)[-1]
+        path_index = int(suffix) if suffix.isdecimal() else -1
+        return (float(path_index), sms_path)
 
     def _decode_pdu_type(self, value: int | str) -> str:
         if isinstance(value, str):

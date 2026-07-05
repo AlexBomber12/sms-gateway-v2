@@ -63,6 +63,26 @@ def make_properties_proxy() -> MagicMock:
     return proxy
 
 
+async def test_list_sms_paths_returns_sorted_path_list(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    fake_messaging_proxy.messaging.get_messages.return_value = [
+        SMS_PATH_10,
+        SMS_PATH_1,
+        SMS_PATH_2,
+    ]
+    fake_bus.get_proxy_object.return_value = fake_messaging_proxy
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    paths = await client.list_sms_paths()
+
+    assert paths == [SMS_PATH_1, SMS_PATH_2, SMS_PATH_10]
+    fake_messaging_proxy.messaging.get_messages.assert_awaited_once_with()
+
+
 async def test_list_messages_returns_parsed_messages_ordered_by_timestamp(
     fake_bus: MagicMock,
     fake_messaging_proxy: MagicMock,
@@ -89,6 +109,27 @@ async def test_list_messages_returns_parsed_messages_ordered_by_timestamp(
     assert messages[0].number == "+15550000001"
     assert messages[0].text == "earlier"
     assert messages[0].pdu_type == "deliver"
+
+
+async def test_list_messages_still_reads_text_synchronously(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+) -> None:
+    sms = make_sms_proxy(
+        number="+15550000001",
+        text="",
+        timestamp="2026-04-26T10:41:00+00:00",
+    )
+    fake_messaging_proxy.messaging.get_messages.return_value = [SMS_PATH_1]
+    fake_bus.get_proxy_object.side_effect = [fake_messaging_proxy, sms]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    messages = await client.list_messages()
+
+    assert messages[0].text == ""
+    sms.sms.get_text.assert_awaited_once_with()
 
 
 async def test_list_messages_parses_modem_manager_timestamp_offset_without_colon(
