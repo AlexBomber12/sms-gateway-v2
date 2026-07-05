@@ -714,9 +714,9 @@ class ModemManagerClient:
                 modem_path=modem_path,
                 interface_name=failing_interface_name,
             )
+            self._prepare_added_watchers_for_modem_path_change()
             self._modem_path = None
             refreshed_path = await self.find_modem()
-            self._prepare_added_watchers_for_modem_path_change()
             refreshed_path, proxy = await self._get_proxy_object(object_kind, refreshed_path)
             refreshed_interfaces = self._get_modem_interfaces_from_fresh_proxy(
                 interface_names,
@@ -772,9 +772,9 @@ class ModemManagerClient:
                 modem_path=modem_path,
                 interface_name=MESSAGING_INTERFACE,
             )
+            self._prepare_added_watchers_for_modem_path_change()
             self._modem_path = None
             refreshed_path = await self.find_modem()
-            self._prepare_added_watchers_for_modem_path_change()
             refreshed_path, proxy = await self._get_proxy_object("messaging object", refreshed_path)
             messaging = self._get_proxy_interface(
                 proxy,
@@ -856,6 +856,8 @@ class ModemManagerClient:
                 and self._is_unknown_object_error(exc)
             ):
                 logger.info("modem_path_stale", modem_path=object_path)
+                if resubscribe_added_watchers:
+                    self._prepare_added_watchers_for_modem_path_change()
                 self._modem_path = None
                 refreshed_path = await self.find_modem()
                 if resubscribe_added_watchers:

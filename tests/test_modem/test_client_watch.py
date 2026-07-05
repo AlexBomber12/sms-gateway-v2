@@ -8,7 +8,7 @@ from dbus_fast import DBusError
 from dbus_fast.errors import InterfaceNotFoundError
 
 from sms_gateway_v2.modem import ModemManagerClient
-from sms_gateway_v2.modem.exceptions import ModemManagerUnavailable
+from sms_gateway_v2.modem.exceptions import ModemManagerUnavailable, ModemNotFound
 from tests.test_modem.factories import make_fake_messaging_proxy
 
 MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
@@ -335,6 +335,53 @@ async def test_message_added_subscription_rebinds_after_partial_refresh_failure(
     await client.get_signal_quality()
 
     client.find_modem.assert_awaited_once_with()
+    refreshed_messaging_proxy.messaging.on_added.assert_called_once()
+    assert (REFRESHED_MODEM_PATH, callback_key) in client._added_watch_keys
+    assert client._added_watch_resubscribe_required is False
+
+
+async def test_message_added_subscription_rebinds_after_find_modem_failure(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    stale_modem_proxy = MagicMock()
+    stale_modem_proxy.get_interface.side_effect = InterfaceNotFoundError(MODEM_INTERFACE)
+    refreshed_messaging_proxy = make_fake_messaging_proxy()
+    fake_bus.get_proxy_object.side_effect = [
+        fake_messaging_proxy,
+        stale_modem_proxy,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    callback = AsyncMock()
+
+    await client.watch_added(callback)
+    callback_key = client._callback_key(callback)
+    client.find_modem = AsyncMock(side_effect=ModemNotFound("no modem"))
+
+    with pytest.raises(ModemNotFound, match="no modem"):
+        await client.get_signal_quality()
+
+    fake_messaging_proxy.messaging.off_added.assert_called_once()
+    assert client._modem_path is None
+    assert client._added_watch_resubscribe_required is True
+    assert client._added_watch_keys == set()
+
+    async def refresh_modem() -> str:
+        client._modem_path = REFRESHED_MODEM_PATH
+        return REFRESHED_MODEM_PATH
+
+    client.find_modem = AsyncMock(side_effect=refresh_modem)
+    fake_bus.get_proxy_object.side_effect = [
+        refreshed_messaging_proxy,
+        fake_modem_proxy,
+    ]
+
+    signal = await client.get_signal_quality()
+
+    assert signal.percent == 76
     refreshed_messaging_proxy.messaging.on_added.assert_called_once()
     assert (REFRESHED_MODEM_PATH, callback_key) in client._added_watch_keys
     assert client._added_watch_resubscribe_required is False
