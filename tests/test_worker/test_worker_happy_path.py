@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from sms_gateway_v2.metrics import MetricsRegistry
@@ -56,3 +57,29 @@ async def test_process_one_pending_item_sends_telegram_message_from_sms(
     telegram_client.send_message.assert_awaited_once_with(
         TelegramMessage.from_sms(chat_id="-100", number=item.sms.number, text=item.sms.text)
     )
+
+
+async def test_worker_updates_last_telegram_success_at(
+    queue: Queue,
+    telegram_client: MagicMock,
+    metrics: MetricsRegistry,
+    sample_sms: IncomingSms,
+) -> None:
+    timestamps: list[datetime] = []
+    worker = DeliveryWorker(
+        queue=queue,
+        telegram_client=telegram_client,
+        telegram_chat_id="-100",
+        metrics=metrics,
+        retry_schedule_seconds=(1, 2, 4),
+        telegram_success_callback=timestamps.append,
+    )
+    item = await queue.enqueue(sample_sms)
+    assert item is not None
+    before = datetime.now(UTC)
+
+    assert await worker._process_one_pending_item() is True
+
+    after = datetime.now(UTC)
+    assert len(timestamps) == 1
+    assert before <= timestamps[0] <= after

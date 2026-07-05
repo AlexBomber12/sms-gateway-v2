@@ -69,6 +69,28 @@ async def test_update_gauges_reflects_files_in_each_state(
     assert metrics.registry.get_sample_value("queue_failed_count") == 1.0
 
 
+async def test_queue_gauge_updates_queue_counts_on_state(
+    queue: Queue,
+    sample_sms: IncomingSms,
+) -> None:
+    metrics = MetricsRegistry()
+    captured: list[tuple[int, int]] = []
+    dirs = queue.state_dirs()
+    _write_item(dirs["pending"], "1714149693000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", sample_sms)
+    _write_item(dirs["failed"], "1714149693001-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sample_sms)
+    _write_item(dirs["failed"], "1714149693002-cccccccccccccccccccccccccccccccc", sample_sms)
+    updater = QueueGaugeUpdater(
+        queue=queue,
+        metrics=metrics,
+        interval_seconds=30.0,
+        queue_counts_callback=lambda pending, failed: captured.append((pending, failed)),
+    )
+
+    await updater._update_gauges()
+
+    assert captured == [(1, 2)]
+
+
 async def test_run_loops_until_stop_called(
     queue: Queue,
     monkeypatch: pytest.MonkeyPatch,

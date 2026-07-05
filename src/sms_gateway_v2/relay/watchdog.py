@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
@@ -11,6 +12,11 @@ from sms_gateway_v2.modem import ModemError, ModemManagerClient
 from sms_gateway_v2.modem.models import RegistrationState
 
 logger = structlog.get_logger(__name__)
+
+ModemHealthCallback = Callable[
+    [str, int | None, str | None, str],
+    None,
+]
 
 _BAD_REGISTRATION_STATES = frozenset(
     {
@@ -29,12 +35,14 @@ class ModemWatchdog:
         interval_seconds: float,
         signal_zero_threshold: int,
         bad_state_minutes: int,
+        modem_health_callback: ModemHealthCallback | None = None,
     ) -> None:
         self._modem_client = modem_client
         self._metrics = metrics
         self._interval_seconds = interval_seconds
         self._signal_zero_threshold = signal_zero_threshold
         self._bad_state_minutes = bad_state_minutes
+        self._modem_health_callback = modem_health_callback
         self._consecutive_zero_signal_polls: int = 0
         self._bad_state_since: datetime | None = None
         self._stop_event = asyncio.Event()
@@ -50,18 +58,34 @@ class ModemWatchdog:
 
     async def _poll_once(self) -> None:
         try:
-            signal = await self._modem_client.get_signal_quality()
-            state = await self._modem_client.get_registration_state()
+            info = await self._modem_client.get_modem_info()
         except ModemError as exc:
             logger.warning("watchdog_poll_failed", error=str(exc))
             return
+        signal = info.signal
+        state = info.registration
+        signal_percent = signal.percent if signal is not None else None
 
-        self._metrics.modem_signal_percent.set(signal.percent)
+        if self._modem_health_callback is not None:
+            self._modem_health_callback(
+                info.state,
+                signal_percent,
+                info.sim_operator_name,
+                state.value,
+            )
+
+        if signal_percent is not None:
+            self._metrics.modem_signal_percent.set(signal_percent)
         for known_state in RegistrationState:
             value = 1 if known_state == state else 0
             self._metrics.modem_state.labels(state=known_state.value).set(value)
 
-        if not signal.recent:
+        if signal is None:
+            logger.info(
+                "watchdog_signal_missing_skipped",
+                consecutive_zero_signal_polls=self._consecutive_zero_signal_polls,
+            )
+        elif not signal.recent:
             logger.info(
                 "watchdog_signal_stale_skipped",
                 percent=signal.percent,
