@@ -70,6 +70,31 @@ def test_relay_disabled_skips_lifespan(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert response.status_code == 200
 
 
+def test_state_endpoint_serializes_delete_failure_fields(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("RELAY_ENABLED", "false")
+
+    relay = MagicMock(spec=SmsRelay)
+    relay.state.return_value = RelayState(
+        status="stopped",
+        started_at=None,
+        last_sms_received_at=None,
+        last_error=None,
+    )
+
+    app = app_module.create_app()
+    app.state.relay = relay
+    with TestClient(app) as client:
+        response = client.get("/state")
+
+    assert response.status_code == 200
+    assert response.json()["sms_delete_failures_count"] == 0
+    assert response.json()["last_delete_failure_at"] is None
+
+
 def test_relay_enabled_calls_start_and_stop(
     monkeypatch: pytest.MonkeyPatch, relay_env: None
 ) -> None:
@@ -466,6 +491,8 @@ def test_state_endpoint_returns_relay_state_when_enabled(
         "started_at": "2026-05-01T12:00:00Z",
         "last_sms_received_at": "2026-05-01T12:30:45Z",
         "last_error": None,
+        "sms_delete_failures_count": 0,
+        "last_delete_failure_at": None,
     }
     assert isinstance(body["started_at"], str)
     assert isinstance(body["last_sms_received_at"], str)

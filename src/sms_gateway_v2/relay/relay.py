@@ -44,6 +44,8 @@ class SmsRelay:
         self._started_at: datetime | None = None
         self._last_sms_received_at: datetime | None = None
         self._last_error: str | None = None
+        self._sms_delete_failures_count = 0
+        self._last_delete_failure_at: datetime | None = None
         self._worker_task: asyncio.Task[None] | None = None
         self._lifecycle_lock: asyncio.Lock = asyncio.Lock()
         self._sms_handler_lock: asyncio.Lock = asyncio.Lock()
@@ -190,6 +192,8 @@ class SmsRelay:
             started_at=self._started_at,
             last_sms_received_at=self._last_sms_received_at,
             last_error=self._last_error,
+            sms_delete_failures_count=self._sms_delete_failures_count,
+            last_delete_failure_at=self._last_delete_failure_at,
         )
 
     async def _process_sms_path(self, sms_path: str, *, fail_on_delete_error: bool) -> None:
@@ -297,11 +301,18 @@ class SmsRelay:
         try:
             await self._modem_client.delete_message(sms_path)
         except MessageDeleteFailed as exc:
-            logger.warning(
-                "relay_sms_delete_failed",
-                sms_path=sms_path,
-                error=str(exc),
-            )
+            self._record_sms_delete_failure(sms_path, exc)
+
+    def _record_sms_delete_failure(self, sms_path: str, exc: MessageDeleteFailed) -> None:
+        self._metrics.sms_delete_failures_total.inc()
+        self._sms_delete_failures_count += 1
+        self._last_delete_failure_at = datetime.now(UTC)
+        logger.warning(
+            "relay_sms_delete_failed",
+            sms_path=sms_path,
+            error=str(exc),
+            delete_failures_count=self._sms_delete_failures_count,
+        )
 
     async def _cancel_pending_text_retries(self) -> None:
         tasks = list(self._pending_text_retries.values())
@@ -335,11 +346,7 @@ class SmsRelay:
         try:
             await self._modem_client.delete_message(sms_path)
         except MessageDeleteFailed as exc:
-            logger.warning(
-                "relay_sms_delete_failed",
-                sms_path=sms_path,
-                error=str(exc),
-            )
+            self._record_sms_delete_failure(sms_path, exc)
             if fail_on_delete_error:
                 raise
 

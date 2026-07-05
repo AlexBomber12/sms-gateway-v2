@@ -67,6 +67,7 @@ async def test_start_rolls_back_when_drain_delete_fails(
     relay: SmsRelay,
     modem_client: MagicMock,
     queue: Queue,
+    metrics: MetricsRegistry,
     sms_factory: SmsFactory,
 ) -> None:
     sms = sms_factory()
@@ -80,6 +81,9 @@ async def test_start_rolls_back_when_drain_delete_fails(
 
     assert relay.state().status == "stopped"
     assert relay.state().last_error == "delete failed"
+    assert relay.state().sms_delete_failures_count == 1
+    assert relay.state().last_delete_failure_at is not None
+    assert metric_value(metrics, "sms_delete_failures_total") == 1.0
     modem_client.disconnect.assert_awaited_once()
     queue.close.assert_awaited_once()
     modem_client.delete_message.assert_awaited_once_with(sms.object_path)

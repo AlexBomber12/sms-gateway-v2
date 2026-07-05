@@ -55,6 +55,8 @@ def test_relay_state_construction() -> None:
     assert state.started_at == started_at
     assert state.last_sms_received_at == last_sms_received_at
     assert state.last_error == "last failure"
+    assert state.sms_delete_failures_count == 0
+    assert state.last_delete_failure_at is None
     assert not hasattr(state, "ignored")
 
 

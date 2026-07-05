@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
@@ -253,6 +254,7 @@ async def test_relay_retry_exhaustion_logs_delete_failure(
         "relay_sms_delete_failed",
         sms_path=sms_path,
         error="delete failed",
+        delete_failures_count=1,
     )
 
 
@@ -423,7 +425,7 @@ async def test_relay_deduplicates_concurrent_retries_for_same_sms_path(
     await relay._cancel_pending_text_retries()
 
 
-async def test_on_new_sms_logs_delete_failure_without_raising(
+async def test_delete_failure_increments_metric_on_signal_path(
     relay: SmsRelay,
     modem_client: MagicMock,
     queue: Queue,
@@ -437,6 +439,7 @@ async def test_on_new_sms_logs_delete_failure_without_raising(
     await register_relay_callback(queue, modem_client, relay)
     modem_client.read_message.return_value = sample_sms
     modem_client.delete_message.side_effect = MessageDeleteFailed("delete failed")
+    before_delete_failure = datetime.now(UTC)
 
     await fire_added_signal(sample_sms.object_path)
 
@@ -444,8 +447,14 @@ async def test_on_new_sms_logs_delete_failure_without_raising(
         "relay_sms_delete_failed",
         sms_path=sample_sms.object_path,
         error="delete failed",
+        delete_failures_count=1,
     )
     assert metric_value(metrics, "sms_received_total") == 1.0
+    assert metric_value(metrics, "sms_delete_failures_total") == 1.0
+    state = relay.state()
+    assert state.sms_delete_failures_count == 1
+    assert state.last_delete_failure_at is not None
+    assert state.last_delete_failure_at >= before_delete_failure
 
 
 async def test_on_new_sms_records_unexpected_enqueue_error_without_raising(
