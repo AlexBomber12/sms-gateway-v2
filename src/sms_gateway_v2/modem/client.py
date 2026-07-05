@@ -381,7 +381,7 @@ class ModemManagerClient:
         self._unsubscribe_all_added_watchers()
         self._added_watch_resubscribe_required = bool(self._added_callbacks)
         if self._added_watch_resubscribe_required:
-            await self._wait_for_reset_reappear()
+            await self._wait_for_reset_reappear(modem_path)
 
     async def list_messages(self) -> list[IncomingSms]:
         modem_path = await self._ensure_modem_path()
@@ -609,16 +609,35 @@ class ModemManagerClient:
             modem_path = await self.find_modem()
             await self._subscribe_missing_added_watchers(modem_path)
 
-    async def _wait_for_reset_reappear(self) -> None:
+    async def _wait_for_reset_reappear(self, reset_modem_path: str) -> None:
         timeout_seconds = self._reset_reappear_timeout_seconds
         if timeout_seconds is None:
             timeout_seconds = get_settings().modem_reset_reappear_timeout_seconds
         started_at = time.monotonic()
+        reset_modem_path_disappeared = False
 
         while time.monotonic() - started_at < timeout_seconds:
             try:
                 modem_path = await self.find_modem()
+                if modem_path == reset_modem_path and not reset_modem_path_disappeared:
+                    self._modem_path = None
+                    elapsed_seconds = time.monotonic() - started_at
+                    remaining_seconds = timeout_seconds - elapsed_seconds
+                    if remaining_seconds <= 0:
+                        break
+                    await asyncio.sleep(
+                        min(_RESET_REAPPEAR_POLL_INTERVAL_SECONDS, remaining_seconds)
+                    )
+                    continue
                 await self._subscribe_missing_added_watchers(modem_path)
+            except ModemNotFound:
+                reset_modem_path_disappeared = True
+                elapsed_seconds = time.monotonic() - started_at
+                remaining_seconds = timeout_seconds - elapsed_seconds
+                if remaining_seconds <= 0:
+                    break
+                await asyncio.sleep(min(_RESET_REAPPEAR_POLL_INTERVAL_SECONDS, remaining_seconds))
+                continue
             except ModemError:
                 elapsed_seconds = time.monotonic() - started_at
                 remaining_seconds = timeout_seconds - elapsed_seconds
