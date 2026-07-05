@@ -7,7 +7,12 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 
 from sms_gateway_v2.metrics import MetricsRegistry
-from sms_gateway_v2.modem import IncomingSms, MessageDeleteFailed, MessageReadMissing
+from sms_gateway_v2.modem import (
+    IncomingSms,
+    MessageDeleteFailed,
+    MessageReadMissing,
+    MessageReadSkipped,
+)
 from sms_gateway_v2.queue import Queue
 from sms_gateway_v2.relay import SmsRelay
 from sms_gateway_v2.worker import DeliveryWorker
@@ -90,6 +95,32 @@ async def test_on_new_sms_logs_and_skips_when_path_not_found(
         "relay_sms_read_missing",
         sms_path=missing_path,
         error="SMS vanished",
+    )
+    assert relay._pending_text_retries == {}
+    queue.enqueue.assert_not_awaited()
+    modem_client.delete_message.assert_not_awaited()
+
+
+async def test_on_new_sms_logs_and_skips_non_inbound_read(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    fire_added_signal: FireAddedSignal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.relay.relay.logger", logger)
+    await register_relay_callback(queue, modem_client, relay)
+    skipped_path = "/org/freedesktop/ModemManager1/SMS/status-report"
+    modem_client.read_message.side_effect = MessageReadSkipped("SMS object is not inbound")
+    queue.enqueue = AsyncMock(wraps=queue.enqueue)
+
+    await fire_added_signal(skipped_path)
+
+    logger.info.assert_called_once_with(
+        "relay_sms_read_skipped",
+        sms_path=skipped_path,
+        error="SMS object is not inbound",
     )
     assert relay._pending_text_retries == {}
     queue.enqueue.assert_not_awaited()
@@ -260,6 +291,47 @@ async def test_relay_retry_stops_when_sms_path_disappears(
         attempts_used=1,
         total_wait_seconds=ANY,
         error="SMS vanished",
+    )
+
+
+async def test_relay_retry_stops_when_sms_path_becomes_non_inbound(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    metrics: MetricsRegistry,
+    fire_added_signal: FireAddedSignal,
+    wait_until: Callable[[Callable[[], bool]], Awaitable[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.relay.relay.logger", logger)
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "5")
+    original_sleep = asyncio.sleep
+
+    async def yield_once(_delay: float) -> None:
+        await original_sleep(0)
+
+    monkeypatch.setattr(relay, "_sleep", yield_once)
+    await register_relay_callback(queue, modem_client, relay)
+    sms_path = "/org/freedesktop/ModemManager1/SMS/status-report"
+    modem_client.read_message.side_effect = [
+        None,
+        MessageReadSkipped("SMS object is not inbound"),
+    ]
+
+    await fire_added_signal(sms_path)
+    await wait_until(lambda: not relay._pending_text_retries)
+
+    assert modem_client.read_message.await_count == 2
+    assert metric_value(metrics, "sms_text_undecoded_total") == 0.0
+    modem_client.delete_message.assert_not_awaited()
+    logger.info.assert_any_call(
+        "sms_text_undecoded_retry_skipped",
+        sms_path=sms_path,
+        attempts_used=1,
+        total_wait_seconds=ANY,
+        error="SMS object is not inbound",
     )
 
 

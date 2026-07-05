@@ -85,6 +85,38 @@ async def test_start_rolls_back_when_drain_delete_fails(
     modem_client.delete_message.assert_awaited_once_with(sms.object_path)
 
 
+async def test_start_rollback_cancels_pending_text_retries(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    sms_factory: SmsFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "5")
+    undecoded = sms_factory(
+        object_path="/org/freedesktop/ModemManager1/SMS/undecoded",
+        text="",
+    )
+    later = sms_factory(
+        object_path="/org/freedesktop/ModemManager1/SMS/later",
+        text="later",
+    )
+    modem_client.list_messages.return_value = [undecoded, later]
+    modem_client.read_message.side_effect = [None, later]
+    modem_client.delete_message.side_effect = MessageDeleteFailed("delete failed")
+    queue.close = AsyncMock(wraps=queue.close)
+
+    with pytest.raises(MessageDeleteFailed, match="delete failed"):
+        await relay.start()
+
+    assert relay.state().status == "stopped"
+    assert relay.state().last_error == "delete failed"
+    assert relay._pending_text_retries == {}
+    modem_client.disconnect.assert_awaited_once()
+    queue.close.assert_awaited_once()
+    modem_client.delete_message.assert_awaited_once_with(later.object_path)
+
+
 async def test_start_handles_empty_drain_gracefully(
     relay: SmsRelay,
     modem_client: MagicMock,

@@ -23,3 +23,7 @@ class MessageDeleteFailed(ModemError):  # noqa: N818
 
 class MessageReadMissing(ModemError):  # noqa: N818
     """Raised when an SMS object disappears before it can be read."""
+
+
+class MessageReadSkipped(ModemError):  # noqa: N818
+    """Raised when an SMS object is intentionally skipped during read."""

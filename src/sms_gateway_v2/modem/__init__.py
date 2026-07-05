@@ -4,6 +4,7 @@ from sms_gateway_v2.modem.client import ModemManagerClient
 from sms_gateway_v2.modem.exceptions import (
     MessageDeleteFailed,
     MessageReadMissing,
+    MessageReadSkipped,
     ModemBusy,
     ModemError,
     ModemManagerUnavailable,
@@ -15,6 +16,7 @@ __all__ = [
     "IncomingSms",
     "MessageDeleteFailed",
     "MessageReadMissing",
+    "MessageReadSkipped",
     "ModemBusy",
     "ModemError",
     "ModemInfo",

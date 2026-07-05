@@ -31,6 +31,7 @@ from sms_gateway_v2.config import get_settings
 from sms_gateway_v2.modem.exceptions import (
     MessageDeleteFailed,
     MessageReadMissing,
+    MessageReadSkipped,
     ModemError,
     ModemManagerUnavailable,
     ModemNotFound,
@@ -449,7 +450,7 @@ class ModemManagerClient:
                 sms_path=sms_path,
                 pdu_type=pdu_type,
             )
-            return None
+            raise MessageReadSkipped(f"SMS object is not inbound: {sms_path}")
 
         timeout_seconds = self._sms_text_wait_timeout_seconds
         if timeout_seconds is None:

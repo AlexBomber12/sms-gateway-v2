@@ -13,6 +13,7 @@ from sms_gateway_v2.modem import (
     IncomingSms,
     MessageDeleteFailed,
     MessageReadMissing,
+    MessageReadSkipped,
     ModemManagerClient,
 )
 from sms_gateway_v2.queue import Queue
@@ -201,6 +202,13 @@ class SmsRelay:
                 error=str(exc),
             )
             return
+        except MessageReadSkipped as exc:
+            logger.info(
+                "relay_sms_read_skipped",
+                sms_path=sms_path,
+                error=str(exc),
+            )
+            return
         if sms is None:
             self._schedule_text_retry(sms_path)
             return
@@ -250,6 +258,15 @@ class SmsRelay:
                 except MessageReadMissing as exc:
                     logger.info(
                         "sms_text_undecoded_retry_missing",
+                        sms_path=sms_path,
+                        attempts_used=attempt,
+                        total_wait_seconds=time.monotonic() - started_at,
+                        error=str(exc),
+                    )
+                    return
+                except MessageReadSkipped as exc:
+                    logger.info(
+                        "sms_text_undecoded_retry_skipped",
                         sms_path=sms_path,
                         attempts_used=attempt,
                         total_wait_seconds=time.monotonic() - started_at,
@@ -334,6 +351,7 @@ class SmsRelay:
         queue_initialized: bool,
     ) -> None:
         self._last_error = str(exc)
+        await self._cancel_pending_text_retries()
         if connected:
             with suppress(Exception):
                 await self._modem_client.disconnect()

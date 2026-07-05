@@ -11,6 +11,7 @@ from dbus_fast.errors import InterfaceNotFoundError
 from sms_gateway_v2.modem import (
     MessageDeleteFailed,
     MessageReadMissing,
+    MessageReadSkipped,
     ModemManagerClient,
     ModemManagerUnavailable,
 )
@@ -583,7 +584,7 @@ async def test_read_message_returns_none_on_empty_text_after_timeout(
     properties.properties.off_properties_changed.assert_called_once()
 
 
-async def test_read_message_skips_non_inbound_pdu(
+async def test_read_message_raises_skipped_for_non_inbound_pdu(
     fake_bus: MagicMock,
 ) -> None:
     sms = make_sms_proxy(
@@ -597,9 +598,9 @@ async def test_read_message_skips_non_inbound_pdu(
     client._bus = fake_bus
     client._modem_path = MODEM_PATH
 
-    message = await client.read_message(SMS_PATH_1)
+    with pytest.raises(MessageReadSkipped, match=SMS_PATH_1):
+        await client.read_message(SMS_PATH_1)
 
-    assert message is None
     sms.sms.get_number.assert_not_awaited()
     sms.sms.get_text.assert_not_awaited()
     sms.sms.get_timestamp.assert_not_awaited()
