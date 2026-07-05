@@ -15,3 +15,5 @@ class RelayState(BaseModel):
     started_at: datetime | None
     last_sms_received_at: datetime | None
     last_error: str | None
+    sms_delete_failures_count: int = 0
+    last_delete_failure_at: datetime | None = None

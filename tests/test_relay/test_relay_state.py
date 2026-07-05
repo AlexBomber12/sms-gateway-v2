@@ -12,6 +12,8 @@ def test_state_returns_current_snapshot(relay: SmsRelay) -> None:
     relay._started_at = started_at
     relay._last_sms_received_at = last_sms_received_at
     relay._last_error = "last failure"
+    relay._sms_delete_failures_count = 2
+    relay._last_delete_failure_at = datetime(2026, 4, 28, 12, 2, tzinfo=UTC)
 
     state = relay.state()
 
@@ -19,3 +21,5 @@ def test_state_returns_current_snapshot(relay: SmsRelay) -> None:
     assert state.started_at == started_at
     assert state.last_sms_received_at == last_sms_received_at
     assert state.last_error == "last failure"
+    assert state.sms_delete_failures_count == 2
+    assert state.last_delete_failure_at == datetime(2026, 4, 28, 12, 2, tzinfo=UTC)
