@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,20 @@ def test_build_relay_uses_configured_cleanup_settings(tmp_path: Path) -> None:
     assert cleanup_scheduler._sent_retention_days == 7
     assert cleanup_scheduler._failed_retention_days == 14
     assert cleanup_scheduler._interval_seconds == 120.0
+
+
+def test_build_relay_wires_worker_success_callback_to_relay_state(tmp_path: Path) -> None:
+    settings = _settings(state_dir=tmp_path / "state")
+    metrics = MetricsRegistry()
+    delivered_at = datetime(2026, 5, 1, 12, 45, tzinfo=UTC)
+
+    relay, _, _, _, _ = build_relay(settings, metrics)
+    callback = relay._worker._telegram_success_callback
+    assert callback is not None
+
+    callback(delivered_at)
+
+    assert relay.state().last_telegram_success_at == delivered_at
 
 
 def test_build_relay_raises_when_token_empty(tmp_path: Path) -> None:

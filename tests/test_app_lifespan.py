@@ -493,6 +493,13 @@ def test_state_endpoint_returns_relay_state_when_enabled(
         "last_error": None,
         "sms_delete_failures_count": 0,
         "last_delete_failure_at": None,
+        "modem_state": None,
+        "modem_signal_percent": None,
+        "modem_operator": None,
+        "modem_registration": None,
+        "queue_pending_count": None,
+        "queue_failed_count": None,
+        "last_telegram_success_at": None,
     }
     assert isinstance(body["started_at"], str)
     assert isinstance(body["last_sms_received_at"], str)

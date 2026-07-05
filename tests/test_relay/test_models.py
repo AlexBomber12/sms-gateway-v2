@@ -57,7 +57,31 @@ def test_relay_state_construction() -> None:
     assert state.last_error == "last failure"
     assert state.sms_delete_failures_count == 0
     assert state.last_delete_failure_at is None
+    assert state.modem_state is None
+    assert state.modem_signal_percent is None
+    assert state.modem_operator is None
+    assert state.modem_registration is None
+    assert state.queue_pending_count is None
+    assert state.queue_failed_count is None
+    assert state.last_telegram_success_at is None
     assert not hasattr(state, "ignored")
+
+
+def test_relay_state_default_new_fields_are_none() -> None:
+    state = RelayState(
+        status="running",
+        started_at=None,
+        last_sms_received_at=None,
+        last_error=None,
+    )
+
+    assert state.modem_state is None
+    assert state.modem_signal_percent is None
+    assert state.modem_operator is None
+    assert state.modem_registration is None
+    assert state.queue_pending_count is None
+    assert state.queue_failed_count is None
+    assert state.last_telegram_success_at is None
 
 
 @pytest.mark.parametrize("status", ["stopped", "starting", "running", "stopping"])

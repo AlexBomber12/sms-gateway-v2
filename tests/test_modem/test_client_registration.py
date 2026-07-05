@@ -101,3 +101,16 @@ async def test_get_registration_state_recovers_from_interface_not_found_on_cache
     assert client._modem_path == REFRESHED_MODEM_PATH
     client.find_modem.assert_awaited_once_with()
     client._resubscribe_added_watchers.assert_awaited_once_with(REFRESHED_MODEM_PATH)
+
+
+async def test_get_operator_name_returns_current_network_operator(
+    fake_bus: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    fake_bus.get_proxy_object.return_value = fake_modem_proxy
+    fake_modem_proxy.modem_3gpp.get_operator_name.return_value = "vodafone IT"
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    assert await client.get_operator_name() == "vodafone IT"

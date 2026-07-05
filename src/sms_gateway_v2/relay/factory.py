@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from sms_gateway_v2.config import Settings
 from sms_gateway_v2.metrics import MetricsRegistry, QueueGaugeUpdater
 from sms_gateway_v2.modem import ModemManagerClient
@@ -41,12 +43,19 @@ def build_relay(
         timeout_seconds=settings.telegram_timeout_seconds,
         max_retries=settings.telegram_max_retries,
     )
+    relay: SmsRelay | None = None
+
+    def record_telegram_success(delivered_at: datetime) -> None:
+        assert relay is not None
+        relay.record_telegram_success(delivered_at)
+
     worker = DeliveryWorker(
         queue=queue,
         telegram_client=telegram_client,
         telegram_chat_id=settings.telegram_chat_id,
         metrics=metrics,
         retry_schedule_seconds=settings.worker_retry_schedule_seconds,
+        telegram_success_callback=record_telegram_success,
     )
     relay = SmsRelay(
         modem_client=modem_client,
@@ -59,6 +68,10 @@ def build_relay(
         queue=queue,
         metrics=metrics,
         interval_seconds=settings.queue_gauge_interval_seconds,
+        queue_counts_callback=lambda pending, failed: relay.update_queue_counts(
+            pending=pending,
+            failed=failed,
+        ),
     )
     watchdog = ModemWatchdog(
         modem_client=modem_client,
@@ -66,6 +79,14 @@ def build_relay(
         interval_seconds=settings.modem_watchdog_interval_seconds,
         signal_zero_threshold=settings.modem_watchdog_signal_zero_threshold,
         bad_state_minutes=settings.modem_watchdog_bad_state_minutes,
+        modem_health_callback=lambda state, signal_percent, operator, registration: (
+            relay.update_modem_health(
+                state=state,
+                signal_percent=signal_percent,
+                operator=operator,
+                registration=registration,
+            )
+        ),
     )
     cleanup_scheduler = CleanupScheduler(
         queue=queue,

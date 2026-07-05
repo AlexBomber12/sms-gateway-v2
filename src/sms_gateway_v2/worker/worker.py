@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
@@ -21,6 +22,8 @@ from sms_gateway_v2.telegram import (
 
 logger = structlog.get_logger(__name__)
 
+TelegramSuccessCallback = Callable[[datetime], None]
+
 
 class DeliveryWorker:
     def __init__(
@@ -30,12 +33,14 @@ class DeliveryWorker:
         telegram_chat_id: str,
         metrics: MetricsRegistry,
         retry_schedule_seconds: tuple[int, ...],
+        telegram_success_callback: TelegramSuccessCallback | None = None,
     ) -> None:
         self._queue = queue
         self._telegram_client = telegram_client
         self._telegram_chat_id = telegram_chat_id
         self._metrics = metrics
         self._retry_schedule_seconds = retry_schedule_seconds
+        self._telegram_success_callback = telegram_success_callback
         self._stop_event: asyncio.Event = asyncio.Event()
         self._wakeup_event: asyncio.Event = asyncio.Event()
 
@@ -146,9 +151,12 @@ class DeliveryWorker:
             return True
 
         await self._queue.mark_sent(item)
+        delivered_at = datetime.now(UTC)
         self._metrics.sms_delivered_total.inc()
         self._metrics.telegram_send_total.labels(result="success").inc()
         self._metrics.last_telegram_success_seconds.set(time.time())
+        if self._telegram_success_callback is not None:
+            self._telegram_success_callback(delivered_at)
         logger.info(
             "delivery_succeeded",
             item_id=item.id,

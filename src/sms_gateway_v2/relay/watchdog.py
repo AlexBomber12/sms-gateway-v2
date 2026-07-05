@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
@@ -12,6 +13,21 @@ from sms_gateway_v2.modem.models import RegistrationState
 
 logger = structlog.get_logger(__name__)
 
+ModemHealthCallback = Callable[
+    [str, int | None, str | None, str],
+    None,
+]
+
+_REGISTERED_REGISTRATION_STATES = frozenset(
+    {
+        RegistrationState.HOME,
+        RegistrationState.ROAMING,
+        RegistrationState.HOME_SMS_ONLY,
+        RegistrationState.ROAMING_SMS_ONLY,
+        RegistrationState.HOME_CSFB_NOT_PREFERRED,
+        RegistrationState.ROAMING_CSFB_NOT_PREFERRED,
+    }
+)
 _BAD_REGISTRATION_STATES = frozenset(
     {
         RegistrationState.DENIED,
@@ -29,12 +45,14 @@ class ModemWatchdog:
         interval_seconds: float,
         signal_zero_threshold: int,
         bad_state_minutes: int,
+        modem_health_callback: ModemHealthCallback | None = None,
     ) -> None:
         self._modem_client = modem_client
         self._metrics = metrics
         self._interval_seconds = interval_seconds
         self._signal_zero_threshold = signal_zero_threshold
         self._bad_state_minutes = bad_state_minutes
+        self._modem_health_callback = modem_health_callback
         self._consecutive_zero_signal_polls: int = 0
         self._bad_state_since: datetime | None = None
         self._stop_event = asyncio.Event()
@@ -54,9 +72,20 @@ class ModemWatchdog:
             state = await self._modem_client.get_registration_state()
         except ModemError as exc:
             logger.warning("watchdog_poll_failed", error=str(exc))
+            self._mark_modem_health_unavailable()
             return
+        operator = await self._read_operator_name()
+        signal_percent = signal.percent
 
-        self._metrics.modem_signal_percent.set(signal.percent)
+        if self._modem_health_callback is not None:
+            self._modem_health_callback(
+                self._modem_state_from_registration(state),
+                signal_percent,
+                operator,
+                state.value,
+            )
+
+        self._metrics.modem_signal_percent.set(signal_percent)
         for known_state in RegistrationState:
             value = 1 if known_state == state else 0
             self._metrics.modem_state.labels(state=known_state.value).set(value)
@@ -99,6 +128,23 @@ class ModemWatchdog:
                 self._metrics.modem_resets_total.inc()
             self._consecutive_zero_signal_polls = 0
             self._bad_state_since = None
+
+    async def _read_operator_name(self) -> str | None:
+        try:
+            return await self._modem_client.get_operator_name()
+        except ModemError as exc:
+            logger.warning("watchdog_operator_name_read_failed", error=str(exc))
+            return None
+
+    def _mark_modem_health_unavailable(self) -> None:
+        if self._modem_health_callback is not None:
+            self._modem_health_callback("unavailable", None, None, "unknown")
+
+    @staticmethod
+    def _modem_state_from_registration(registration: RegistrationState) -> str:
+        if registration in _REGISTERED_REGISTRATION_STATES:
+            return "registered"
+        return registration.value
 
     def stop(self) -> None:
         self._stop_event.set()

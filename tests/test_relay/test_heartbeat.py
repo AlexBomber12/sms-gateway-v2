@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -24,6 +24,14 @@ def _make_relay(
     started_at: datetime | None = datetime(2026, 5, 1, 18, 0, 0, tzinfo=UTC),
     last_sms_received_at: datetime | None = datetime(2026, 4, 28, 14, 22, 11, tzinfo=UTC),
     last_error: str | None = None,
+    modem_state: str | None = None,
+    modem_signal_percent: int | None = None,
+    modem_operator: str | None = None,
+    modem_registration: str | None = None,
+    queue_pending_count: int | None = None,
+    queue_failed_count: int | None = None,
+    sms_delete_failures_count: int = 0,
+    last_telegram_success_at: datetime | None = None,
 ) -> MagicMock:
     relay = MagicMock(spec=SmsRelay)
     relay.state = MagicMock(
@@ -32,6 +40,14 @@ def _make_relay(
             started_at=started_at,
             last_sms_received_at=last_sms_received_at,
             last_error=last_error,
+            sms_delete_failures_count=sms_delete_failures_count,
+            modem_state=modem_state,
+            modem_signal_percent=modem_signal_percent,
+            modem_operator=modem_operator,
+            modem_registration=modem_registration,
+            queue_pending_count=queue_pending_count,
+            queue_failed_count=queue_failed_count,
+            last_telegram_success_at=last_telegram_success_at,
         )
     )
     return relay
@@ -99,6 +115,162 @@ async def test_send_heartbeat_renders_none_values_as_placeholder() -> None:
     assert "Started: (none)" in sent_message.text
     assert "Last SMS: (none)" in sent_message.text
     assert "Last error: (none)" in sent_message.text
+
+
+async def test_heartbeat_healthy_body_includes_all_new_fields() -> None:
+    telegram_client = _make_telegram_client()
+    relay = _make_relay(
+        modem_state="registered",
+        modem_signal_percent=81,
+        modem_operator="MTS",
+        modem_registration="roaming",
+        queue_pending_count=2,
+        queue_failed_count=1,
+        sms_delete_failures_count=0,
+        last_telegram_success_at=datetime.now(UTC) - timedelta(minutes=3),
+    )
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=86400.0,
+    )
+
+    await scheduler._send_heartbeat()
+
+    sent_message = telegram_client.send_message.await_args.args[0]
+    assert "<b>SMS Gateway v2: alive</b>" in sent_message.text
+    assert "<b>SMS Gateway v2: ALERT</b>" not in sent_message.text
+    assert "Modem: registered, signal 81%, MTS (roaming)" in sent_message.text
+    assert "Queue: pending 2, failed 1" in sent_message.text
+    assert "Deletes failed: 0" in sent_message.text
+    assert "Last Telegram OK:" in sent_message.text
+
+
+async def test_heartbeat_degraded_when_modem_not_registered() -> None:
+    telegram_client = _make_telegram_client()
+    relay = _make_relay(modem_state="disabled", sms_delete_failures_count=0)
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=86400.0,
+    )
+
+    await scheduler._send_heartbeat()
+
+    text = telegram_client.send_message.await_args.args[0].text
+    assert text.startswith("<b>SMS Gateway v2: ALERT</b>\n<b>ALERT</b>")
+    assert "- modem state: disabled (expected registered)" in text
+    assert "- delete failures:" not in text
+    assert "- last successful delivery:" not in text
+
+
+async def test_heartbeat_degraded_when_delete_failures_present() -> None:
+    telegram_client = _make_telegram_client()
+    relay = _make_relay(modem_state="registered", sms_delete_failures_count=3)
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=86400.0,
+    )
+
+    await scheduler._send_heartbeat()
+
+    text = telegram_client.send_message.await_args.args[0].text
+    assert "<b>SMS Gateway v2: ALERT</b>" in text
+    assert "- delete failures: 3" in text
+    assert "- modem state:" not in text
+
+
+async def test_heartbeat_degraded_when_telegram_stale() -> None:
+    telegram_client = _make_telegram_client()
+    relay = _make_relay(
+        modem_state="registered",
+        sms_delete_failures_count=0,
+        last_telegram_success_at=datetime.now(UTC) - timedelta(hours=50),
+    )
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=86400.0,
+    )
+
+    await scheduler._send_heartbeat()
+
+    text = telegram_client.send_message.await_args.args[0].text
+    assert "<b>SMS Gateway v2: ALERT</b>" in text
+    assert "- last successful delivery:" in text
+    assert "ago" in text
+    assert "- modem state:" not in text
+    assert "- delete failures:" not in text
+
+
+async def test_heartbeat_degraded_when_telegram_stale_naive_timestamp() -> None:
+    telegram_client = _make_telegram_client()
+    relay = _make_relay(
+        modem_state="registered",
+        last_telegram_success_at=datetime.now() - timedelta(hours=50),
+    )
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=86400.0,
+    )
+
+    await scheduler._send_heartbeat()
+
+    text = telegram_client.send_message.await_args.args[0].text
+    assert "- last successful delivery:" in text
+
+
+async def test_heartbeat_degraded_shows_multiple_reasons() -> None:
+    telegram_client = _make_telegram_client()
+    relay = _make_relay(
+        modem_state="disabled",
+        sms_delete_failures_count=3,
+        last_telegram_success_at=datetime.now(UTC) - timedelta(hours=50),
+    )
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=86400.0,
+    )
+
+    await scheduler._send_heartbeat()
+
+    text = telegram_client.send_message.await_args.args[0].text
+    assert "- modem state: disabled (expected registered)" in text
+    assert "- delete failures: 3" in text
+    assert "- last successful delivery:" in text
+
+
+async def test_heartbeat_gracefully_renders_unknown_when_state_incomplete() -> None:
+    telegram_client = _make_telegram_client()
+    relay = _make_relay(
+        modem_state=None,
+        queue_pending_count=None,
+        queue_failed_count=None,
+        last_telegram_success_at=None,
+    )
+    scheduler = HeartbeatScheduler(
+        telegram_client=telegram_client,
+        relay=relay,
+        chat_id="-100",
+        interval_seconds=86400.0,
+    )
+
+    await scheduler._send_heartbeat()
+
+    text = telegram_client.send_message.await_args.args[0].text
+    assert "<b>SMS Gateway v2: alive</b>" in text
+    assert "<b>SMS Gateway v2: ALERT</b>" not in text
+    assert "Modem: unknown" in text
+    assert "Queue: pending unknown, failed unknown" in text
 
 
 async def test_send_heartbeat_swallows_validation_error_from_oversized_last_error(

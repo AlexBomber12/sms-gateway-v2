@@ -46,6 +46,13 @@ class SmsRelay:
         self._last_error: str | None = None
         self._sms_delete_failures_count = 0
         self._last_delete_failure_at: datetime | None = None
+        self._modem_state: str | None = None
+        self._modem_signal_percent: int | None = None
+        self._modem_operator: str | None = None
+        self._modem_registration: str | None = None
+        self._queue_pending_count: int | None = None
+        self._queue_failed_count: int | None = None
+        self._last_telegram_success_at: datetime | None = None
         self._worker_task: asyncio.Task[None] | None = None
         self._lifecycle_lock: asyncio.Lock = asyncio.Lock()
         self._sms_handler_lock: asyncio.Lock = asyncio.Lock()
@@ -194,7 +201,34 @@ class SmsRelay:
             last_error=self._last_error,
             sms_delete_failures_count=self._sms_delete_failures_count,
             last_delete_failure_at=self._last_delete_failure_at,
+            modem_state=self._modem_state,
+            modem_signal_percent=self._modem_signal_percent,
+            modem_operator=self._modem_operator,
+            modem_registration=self._modem_registration,
+            queue_pending_count=self._queue_pending_count,
+            queue_failed_count=self._queue_failed_count,
+            last_telegram_success_at=self._last_telegram_success_at,
         )
+
+    def update_modem_health(
+        self,
+        *,
+        state: str,
+        signal_percent: int | None,
+        operator: str | None,
+        registration: str,
+    ) -> None:
+        self._modem_state = state
+        self._modem_signal_percent = signal_percent
+        self._modem_operator = operator
+        self._modem_registration = registration
+
+    def update_queue_counts(self, *, pending: int, failed: int) -> None:
+        self._queue_pending_count = pending
+        self._queue_failed_count = failed
+
+    def record_telegram_success(self, delivered_at: datetime) -> None:
+        self._last_telegram_success_at = delivered_at
 
     async def _process_sms_path(self, sms_path: str, *, fail_on_delete_error: bool) -> None:
         try:

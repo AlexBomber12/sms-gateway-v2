@@ -373,6 +373,20 @@ class ModemManagerClient:
         )
         return registration
 
+    async def get_operator_name(self) -> str:
+        started_at = time.monotonic()
+        modem_path, modem_3gpp = await self._get_modem_interface(MODEM_3GPP_INTERFACE)
+        modem_3gpp = cast(Modem3gppInterface, modem_3gpp)
+
+        operator_name = await self._read_required("OperatorName", modem_3gpp.get_operator_name)
+        logger.info(
+            "operator_name_read",
+            duration_seconds=time.monotonic() - started_at,
+            modem_path=modem_path,
+            operator_name=operator_name,
+        )
+        return operator_name
+
     async def reset(self) -> None:
         started_at = time.monotonic()
         modem_path, modem = await self._get_modem_interface(MODEM_INTERFACE)
