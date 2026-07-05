@@ -21,12 +21,14 @@ from sms_gateway_v2.metrics import (
     telegram_send_failures_total,
     telegram_send_total,
 )
+from sms_gateway_v2.metrics.registry import sms_text_undecoded_total
 
 METRIC_NAMES = [
     sms_received_total,
     sms_delivered_total,
     sms_failed_total,
     sms_dedup_hits_total,
+    sms_text_undecoded_total,
     queue_pending_count,
     queue_processing_count,
     queue_sent_count,
@@ -46,7 +48,7 @@ def test_metrics_registry_creates_all_metrics_on_fresh_collector_registry() -> N
     registry = MetricsRegistry()
 
     assert isinstance(registry.registry, CollectorRegistry)
-    assert len(METRIC_NAMES) == 16
+    assert len(METRIC_NAMES) == 17
     for metric_name in METRIC_NAMES:
         assert hasattr(registry, metric_name)
 
@@ -77,3 +79,11 @@ def test_modem_state_label_is_rendered() -> None:
     registry.modem_state.labels(state="registered").set(1)
 
     assert b'modem_state{state="registered"} 1.0' in registry.render()
+
+
+def test_sms_text_undecoded_metric_renders_incremented_value() -> None:
+    registry = MetricsRegistry()
+
+    registry.sms_text_undecoded_total.inc()
+
+    assert b"sms_text_undecoded_total 1.0" in registry.render()

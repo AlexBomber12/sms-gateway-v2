@@ -547,7 +547,7 @@ async def test_read_message_polls_when_properties_lookup_fails(
     assert fake_bus.get_proxy_object.call_count == 1
 
 
-async def test_read_message_logs_warning_and_returns_empty_on_timeout(
+async def test_read_message_returns_none_on_empty_text_after_timeout(
     fake_bus: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -568,8 +568,7 @@ async def test_read_message_logs_warning_and_returns_empty_on_timeout(
     message = await client.read_message(SMS_PATH_1)
     elapsed = time.monotonic() - started_at
 
-    assert message is not None
-    assert message.text == ""
+    assert message is None
     assert 0.04 <= elapsed < 0.25
     logger.warning.assert_called_once_with(
         "sms_text_wait_timeout",

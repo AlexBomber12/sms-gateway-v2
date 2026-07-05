@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from collections.abc import Awaitable, Callable
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
@@ -84,9 +85,228 @@ async def test_on_new_sms_logs_and_skips_when_path_not_found(
 
     await fire_added_signal(missing_path)
 
-    logger.warning.assert_called_once_with("relay_sms_path_not_found", sms_path=missing_path)
+    logger.warning.assert_not_called()
+    assert missing_path in relay._pending_text_retries
     queue.enqueue.assert_not_awaited()
     modem_client.delete_message.assert_not_awaited()
+    await relay._cancel_pending_text_retries()
+
+
+async def test_relay_schedules_retry_when_read_message_returns_none(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    fire_added_signal: FireAddedSignal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "5")
+    await register_relay_callback(queue, modem_client, relay)
+    sms_path = "/org/freedesktop/ModemManager1/SMS/undecoded"
+    modem_client.read_message.return_value = None
+
+    await fire_added_signal(sms_path)
+
+    assert sms_path in relay._pending_text_retries
+    assert not relay._pending_text_retries[sms_path].done()
+    modem_client.read_message.assert_awaited_once_with(sms_path)
+    modem_client.delete_message.assert_not_awaited()
+    await relay._cancel_pending_text_retries()
+
+
+async def test_relay_retry_recovers_when_text_becomes_available(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    sample_sms: IncomingSms,
+    fire_added_signal: FireAddedSignal,
+    wait_until: Callable[[Callable[[], bool]], Awaitable[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.relay.relay.logger", logger)
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "5")
+
+    original_sleep = asyncio.sleep
+
+    async def yield_once(_delay: float) -> None:
+        await original_sleep(0)
+
+    monkeypatch.setattr(relay, "_sleep", yield_once)
+    await register_relay_callback(queue, modem_client, relay)
+    queue.enqueue = AsyncMock(wraps=queue.enqueue)
+    modem_client.read_message.side_effect = [None, sample_sms]
+
+    await fire_added_signal(sample_sms.object_path)
+    await wait_until(lambda: modem_client.delete_message.await_count == 1)
+    await wait_until(lambda: not relay._pending_text_retries)
+
+    queue.enqueue.assert_awaited_once_with(sample_sms)
+    modem_client.delete_message.assert_awaited_once_with(sample_sms.object_path)
+    logger.info.assert_any_call(
+        "sms_text_undecoded_retry_recovered",
+        sms_path=sample_sms.object_path,
+        attempts_used=1,
+        total_wait_seconds=ANY,
+    )
+
+
+async def test_relay_retry_exhaustion_marks_undecodable_and_deletes(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    metrics: MetricsRegistry,
+    fire_added_signal: FireAddedSignal,
+    wait_until: Callable[[Callable[[], bool]], Awaitable[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.relay.relay.logger", logger)
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "5")
+    original_sleep = asyncio.sleep
+
+    async def yield_once(_delay: float) -> None:
+        await original_sleep(0)
+
+    monkeypatch.setattr(relay, "_sleep", yield_once)
+    await register_relay_callback(queue, modem_client, relay)
+    sms_path = "/org/freedesktop/ModemManager1/SMS/undecoded"
+    modem_client.read_message.return_value = None
+
+    await fire_added_signal(sms_path)
+    await wait_until(lambda: modem_client.delete_message.await_count == 1)
+    await wait_until(lambda: not relay._pending_text_retries)
+
+    assert modem_client.read_message.await_count == 4
+    assert metric_value(metrics, "sms_text_undecoded_total") == 1.0
+    modem_client.delete_message.assert_awaited_once_with(sms_path)
+    logger.error.assert_called_once_with(
+        "sms_text_undecodable",
+        sms_path=sms_path,
+        total_wait_seconds=ANY,
+        attempts_used=3,
+    )
+
+
+async def test_relay_retry_exhaustion_logs_delete_failure(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    fire_added_signal: FireAddedSignal,
+    wait_until: Callable[[Callable[[], bool]], Awaitable[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.relay.relay.logger", logger)
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "5")
+    original_sleep = asyncio.sleep
+
+    async def yield_once(_delay: float) -> None:
+        await original_sleep(0)
+
+    monkeypatch.setattr(relay, "_sleep", yield_once)
+    await register_relay_callback(queue, modem_client, relay)
+    modem_client.read_message.return_value = None
+    modem_client.delete_message.side_effect = MessageDeleteFailed("delete failed")
+    sms_path = "/org/freedesktop/ModemManager1/SMS/undecoded"
+
+    await fire_added_signal(sms_path)
+    await wait_until(lambda: modem_client.delete_message.await_count == 1)
+
+    logger.warning.assert_called_once_with(
+        "relay_sms_delete_failed",
+        sms_path=sms_path,
+        error="delete failed",
+    )
+
+
+def test_relay_retry_done_records_unexpected_task_error(
+    relay: SmsRelay,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.relay.relay.logger", logger)
+    task = MagicMock(spec=asyncio.Future)
+    task.cancelled.return_value = False
+    task.result.side_effect = RuntimeError("boom")
+    relay._pending_text_retries["sms-path"] = task
+
+    relay._handle_text_retry_done("sms-path", task)
+
+    assert relay._pending_text_retries == {}
+    assert relay.state().last_error == "boom"
+    logger.exception.assert_called_once_with(
+        "sms_text_undecoded_retry_failed",
+        sms_path="sms-path",
+        error="boom",
+    )
+
+
+async def test_relay_retry_state_cleaned_on_completion(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    metrics: MetricsRegistry,
+    fire_added_signal: FireAddedSignal,
+    wait_until: Callable[[Callable[[], bool]], Awaitable[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "5")
+    original_sleep = asyncio.sleep
+
+    async def yield_once(_delay: float) -> None:
+        await original_sleep(0)
+
+    monkeypatch.setattr(relay, "_sleep", yield_once)
+    await register_relay_callback(queue, modem_client, relay)
+    modem_client.read_message.return_value = None
+
+    await fire_added_signal("/org/freedesktop/ModemManager1/SMS/undecoded")
+    await wait_until(lambda: metric_value(metrics, "sms_text_undecoded_total") == 1.0)
+    await wait_until(lambda: not relay._pending_text_retries)
+
+    assert relay._pending_text_retries == {}
+
+
+async def test_relay_shutdown_cancels_pending_retries(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    fire_added_signal: FireAddedSignal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "5")
+    await register_relay_callback(queue, modem_client, relay)
+    modem_client.read_message.return_value = None
+    sms_path = "/org/freedesktop/ModemManager1/SMS/undecoded"
+
+    await fire_added_signal(sms_path)
+    task = relay._pending_text_retries[sms_path]
+    relay._status = "running"
+    await relay.stop()
+
+    assert task.cancelled()
+    assert relay._pending_text_retries == {}
+
+
+async def test_relay_deduplicates_concurrent_retries_for_same_sms_path(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "5")
+    await queue.initialize()
+    modem_client.read_message.return_value = None
+    sms_path = "/org/freedesktop/ModemManager1/SMS/undecoded"
+
+    await asyncio.gather(relay._on_new_sms(sms_path), relay._on_new_sms(sms_path))
+
+    assert list(relay._pending_text_retries) == [sms_path]
+    assert not relay._pending_text_retries[sms_path].done()
+    await relay._cancel_pending_text_retries()
 
 
 async def test_on_new_sms_logs_delete_failure_without_raising(

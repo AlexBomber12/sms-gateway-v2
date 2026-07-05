@@ -432,7 +432,7 @@ class ModemManagerClient:
 
         Some modems expose the SMS object and emit MessageAdded before ModemManager's async
         decoder has populated the Text property. This waits briefly for the Text property
-        change before returning, while still allowing degraded empty-body delivery on timeout.
+        change before returning, and returns None if Text remains empty after the timeout.
         """
         try:
             sms = await self._get_sms_interface(sms_path)
@@ -483,6 +483,9 @@ class ModemManagerClient:
                     )
             finally:
                 properties.off_properties_changed(handle_properties_changed)
+
+        if text == "":
+            return None
 
         message = IncomingSms(
             object_path=sms_path,

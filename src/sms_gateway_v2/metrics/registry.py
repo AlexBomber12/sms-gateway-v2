@@ -6,6 +6,7 @@ sms_received_total = "sms_received_total"
 sms_delivered_total = "sms_delivered_total"
 sms_failed_total = "sms_failed_total"
 sms_dedup_hits_total = "sms_dedup_hits_total"
+sms_text_undecoded_total = "sms_text_undecoded_total"
 queue_pending_count = "queue_pending_count"
 queue_processing_count = "queue_processing_count"
 queue_sent_count = "queue_sent_count"
@@ -41,6 +42,11 @@ class MetricsRegistry:
         self.sms_dedup_hits_total = Counter(
             sms_dedup_hits_total,
             "Total enqueue attempts skipped because of dedup match.",
+            registry=self.registry,
+        )
+        self.sms_text_undecoded_total = Counter(
+            sms_text_undecoded_total,
+            "Total SMS dropped because Text remained empty across all decode retries.",
             registry=self.registry,
         )
         self.queue_pending_count = Gauge(
