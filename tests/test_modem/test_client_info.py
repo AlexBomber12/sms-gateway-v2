@@ -15,7 +15,10 @@ from sms_gateway_v2.modem import (
 )
 
 MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/0"
+REFRESHED_MODEM_PATH = "/org/freedesktop/ModemManager1/Modem/1"
 SIM_PATH = "/org/freedesktop/ModemManager1/SIM/0"
+MODEM_INTERFACE = "org.freedesktop.ModemManager1.Modem"
+MODEM_3GPP_INTERFACE = "org.freedesktop.ModemManager1.Modem.Modem3gpp"
 
 
 def configure_info_proxies(
@@ -248,7 +251,7 @@ async def test_get_modem_info_wraps_modem_interface_lookup_failures(
     fake_sim_proxy: MagicMock,
 ) -> None:
     configure_info_proxies(fake_bus, fake_modem_proxy, fake_sim_proxy)
-    error = InterfaceNotFoundError("org.freedesktop.ModemManager1.Modem.Modem3gpp")
+    error = DBusError("org.freedesktop.DBus.Error.Failed", "lookup failed")
 
     def get_interface(interface_name: str) -> object:
         if interface_name == "org.freedesktop.ModemManager1.Modem.Modem3gpp":
@@ -267,6 +270,62 @@ async def test_get_modem_info_wraps_modem_interface_lookup_failures(
         await client.get_modem_info()
 
     assert exc.value.__cause__ is error
+
+
+async def test_get_modem_info_refetches_all_interfaces_after_path_refresh(
+    fake_bus: MagicMock,
+) -> None:
+    stale_modem = MagicMock()
+    stale_modem.get_manufacturer = AsyncMock(return_value="stale manufacturer")
+    stale_modem.get_model = AsyncMock(return_value="stale model")
+    stale_proxy = MagicMock()
+
+    def get_stale_interface(interface_name: str) -> object:
+        if interface_name == MODEM_INTERFACE:
+            return stale_modem
+        raise InterfaceNotFoundError(MODEM_3GPP_INTERFACE)
+
+    stale_proxy.get_interface.side_effect = get_stale_interface
+
+    refreshed_modem = MagicMock()
+    refreshed_modem.get_manufacturer = AsyncMock(return_value="refreshed manufacturer")
+    refreshed_modem.get_model = AsyncMock(return_value="refreshed model")
+    refreshed_modem.get_equipment_identifier = AsyncMock(return_value="refreshed imei")
+    refreshed_modem.get_primary_port = AsyncMock(return_value="ttyUSB3")
+    refreshed_modem.get_state = AsyncMock(return_value=8)
+    refreshed_modem.get_signal_quality = AsyncMock(return_value=(91, True))
+    refreshed_modem.get_sim = AsyncMock(return_value="/")
+    refreshed_3gpp = MagicMock()
+    refreshed_3gpp.get_registration_state = AsyncMock(return_value=5)
+    refreshed_3gpp.get_operator_name = AsyncMock(return_value="vodafone IT")
+    refreshed_3gpp.get_operator_code = AsyncMock(return_value="22210")
+    refreshed_proxy = MagicMock()
+    refreshed_proxy.get_interface.side_effect = lambda name: {
+        MODEM_INTERFACE: refreshed_modem,
+        MODEM_3GPP_INTERFACE: refreshed_3gpp,
+    }[name]
+    fake_bus.get_proxy_object.side_effect = [stale_proxy, refreshed_proxy]
+
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def refresh_modem() -> str:
+        client._modem_path = REFRESHED_MODEM_PATH
+        return REFRESHED_MODEM_PATH
+
+    client.find_modem = AsyncMock(side_effect=refresh_modem)
+    client._resubscribe_added_watchers = AsyncMock()
+
+    info = await client.get_modem_info()
+
+    assert info.object_path == REFRESHED_MODEM_PATH
+    assert info.manufacturer == "refreshed manufacturer"
+    assert info.model == "refreshed model"
+    stale_modem.get_manufacturer.assert_not_awaited()
+    stale_modem.get_model.assert_not_awaited()
+    client.find_modem.assert_awaited_once_with()
+    client._resubscribe_added_watchers.assert_awaited_once_with(REFRESHED_MODEM_PATH)
 
 
 async def test_get_modem_info_wraps_sim_lookup_failures(

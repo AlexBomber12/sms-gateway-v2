@@ -259,20 +259,14 @@ class ModemManagerClient:
 
     async def get_modem_info(self) -> ModemInfo:
         started_at = time.monotonic()
-        modem_path = await self._ensure_modem_path()
-
-        modem_path, proxy = await self._get_proxy_object(
-            "modem object",
-            modem_path,
-            refresh_cached_modem=True,
+        modem_path, interfaces = await self._get_modem_interfaces(
+            (MODEM_INTERFACE, MODEM_3GPP_INTERFACE)
         )
-        modem = cast(
-            ModemInterface,
-            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_INTERFACE),
-        )
+        modem, modem_3gpp = interfaces
+        modem = cast(ModemInterface, modem)
         modem_3gpp = cast(
             Modem3gppInterface,
-            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_3GPP_INTERFACE),
+            modem_3gpp,
         )
 
         manufacturer = await self._read_required("Manufacturer", modem.get_manufacturer)
@@ -328,16 +322,8 @@ class ModemManagerClient:
 
     async def get_signal_quality(self) -> SignalQuality:
         started_at = time.monotonic()
-        modem_path = await self._ensure_modem_path()
-        modem_path, proxy = await self._get_proxy_object(
-            "modem object",
-            modem_path,
-            refresh_cached_modem=True,
-        )
-        modem = cast(
-            ModemInterface,
-            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_INTERFACE),
-        )
+        modem_path, modem = await self._get_modem_interface(MODEM_INTERFACE)
+        modem = cast(ModemInterface, modem)
 
         signal_percent, signal_recent = await self._read_required(
             "SignalQuality",
@@ -355,16 +341,8 @@ class ModemManagerClient:
 
     async def get_registration_state(self) -> RegistrationState:
         started_at = time.monotonic()
-        modem_path = await self._ensure_modem_path()
-        modem_path, proxy = await self._get_proxy_object(
-            "modem object",
-            modem_path,
-            refresh_cached_modem=True,
-        )
-        modem_3gpp = cast(
-            Modem3gppInterface,
-            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_3GPP_INTERFACE),
-        )
+        modem_path, modem_3gpp = await self._get_modem_interface(MODEM_3GPP_INTERFACE)
+        modem_3gpp = cast(Modem3gppInterface, modem_3gpp)
 
         registration_value = await self._read_required(
             "RegistrationState",
@@ -381,16 +359,8 @@ class ModemManagerClient:
 
     async def reset(self) -> None:
         started_at = time.monotonic()
-        modem_path = await self._ensure_modem_path()
-        modem_path, proxy = await self._get_proxy_object(
-            "modem object",
-            modem_path,
-            refresh_cached_modem=True,
-        )
-        modem = cast(
-            ModemInterface,
-            self._get_proxy_interface(proxy, "modem object", modem_path, MODEM_INTERFACE),
-        )
+        modem_path, modem = await self._get_modem_interface(MODEM_INTERFACE)
+        modem = cast(ModemInterface, modem)
         try:
             await modem.call_reset()
         except DBUS_OPERATION_ERRORS as exc:
@@ -572,10 +542,15 @@ class ModemManagerClient:
         modem_path: str,
         callback_key: CallbackKey,
         callback: AddedCallback,
+        *,
+        resubscribe_added_watchers: bool = True,
     ) -> None:
         watch_key = (modem_path, callback_key)
         if watch_key not in self._added_watch_keys:
-            modem_path, messaging = await self._get_messaging_interface(modem_path)
+            modem_path, messaging = await self._get_messaging_interface(
+                modem_path,
+                resubscribe_added_watchers=resubscribe_added_watchers,
+            )
             watch_key = (modem_path, callback_key)
             if watch_key not in self._added_watch_keys:
                 handler = self._build_added_handler(modem_path, callback)
@@ -606,10 +581,19 @@ class ModemManagerClient:
         self._unsubscribe_all_added_watchers()
         await self._subscribe_missing_added_watchers(modem_path)
 
+    def _prepare_added_watchers_for_modem_path_change(self) -> None:
+        self._unsubscribe_all_added_watchers()
+        self._added_watch_resubscribe_required = bool(self._added_callbacks)
+
     async def _subscribe_missing_added_watchers(self, modem_path: str) -> None:
         self._added_watch_resubscribe_required = bool(self._added_callbacks)
         for callback_key, callback in self._added_callbacks.items():
-            await self._subscribe_added_watch(modem_path, callback_key, callback)
+            await self._subscribe_added_watch(
+                modem_path,
+                callback_key,
+                callback,
+                resubscribe_added_watchers=False,
+            )
         self._added_watch_resubscribe_required = self._needs_added_watch_resubscribe()
 
     async def _resubscribe_added_watchers_after_reconnect(self) -> None:
@@ -683,18 +667,141 @@ class ModemManagerClient:
             self._get_proxy_interface(proxy, "SIM object", sim_path, SIM_INTERFACE),
         )
 
+    async def _get_modem_interface(
+        self,
+        interface_name: str,
+        *,
+        object_kind: str = "modem object",
+    ) -> tuple[str, object]:
+        modem_path, interfaces = await self._get_modem_interfaces((interface_name,), object_kind)
+        return modem_path, interfaces[0]
+
+    async def _get_modem_interfaces(
+        self,
+        interface_names: tuple[str, ...],
+        object_kind: str = "modem object",
+    ) -> tuple[str, tuple[object, ...]]:
+        modem_path = await self._ensure_modem_path()
+        requested_modem_path = modem_path
+        modem_path, proxy = await self._get_proxy_object(
+            object_kind,
+            modem_path,
+            refresh_cached_modem=True,
+            resubscribe_added_watchers=False,
+        )
+        resolved_path, interfaces = await self._get_modem_interfaces_from_proxy(
+            interface_names,
+            object_kind,
+            modem_path,
+            proxy,
+        )
+        if resolved_path != requested_modem_path or self._added_watch_resubscribe_required:
+            await self._resubscribe_added_watchers(resolved_path)
+        return resolved_path, interfaces
+
+    async def _get_modem_interfaces_from_proxy(
+        self,
+        interface_names: tuple[str, ...],
+        object_kind: str,
+        modem_path: str,
+        proxy: ProxyObject,
+    ) -> tuple[str, tuple[object, ...]]:
+        interfaces: list[object] = []
+        failing_interface_name = ""
+        try:
+            for interface_name in interface_names:
+                failing_interface_name = interface_name
+                interfaces.append(
+                    self._get_proxy_interface(proxy, object_kind, modem_path, interface_name)
+                )
+        except ModemManagerUnavailable as exc:
+            if not self._is_stale_modem_path_unavailable(exc):
+                raise
+            if modem_path != self._modem_path:
+                raise
+            logger.info(
+                "modem_interface_stale",
+                modem_path=modem_path,
+                interface_name=failing_interface_name,
+            )
+            self._prepare_added_watchers_for_modem_path_change()
+            self._modem_path = None
+            refreshed_path = await self.find_modem()
+            refreshed_path, proxy = await self._get_proxy_object(object_kind, refreshed_path)
+            refreshed_interfaces = self._get_modem_interfaces_from_fresh_proxy(
+                interface_names,
+                object_kind,
+                refreshed_path,
+                proxy,
+            )
+            return refreshed_interfaces
+        return modem_path, tuple(interfaces)
+
+    def _get_modem_interfaces_from_fresh_proxy(
+        self,
+        interface_names: tuple[str, ...],
+        object_kind: str,
+        modem_path: str,
+        proxy: ProxyObject,
+    ) -> tuple[str, tuple[object, ...]]:
+        return (
+            modem_path,
+            tuple(
+                self._get_proxy_interface(proxy, object_kind, modem_path, interface_name)
+                for interface_name in interface_names
+            ),
+        )
+
     async def _get_messaging_interface(
         self,
         modem_path: str,
+        *,
+        resubscribe_added_watchers: bool = True,
     ) -> tuple[str, MessagingInterface]:
+        requested_modem_path = modem_path
         modem_path, proxy = await self._get_proxy_object(
             "messaging object",
             modem_path,
             refresh_cached_modem=True,
+            resubscribe_added_watchers=False,
         )
+        try:
+            messaging = self._get_proxy_interface(
+                proxy,
+                "messaging object",
+                modem_path,
+                MESSAGING_INTERFACE,
+            )
+        except ModemManagerUnavailable as exc:
+            if not self._is_stale_modem_path_unavailable(exc):
+                raise
+            if modem_path != self._modem_path:
+                raise
+            logger.info(
+                "modem_interface_stale",
+                modem_path=modem_path,
+                interface_name=MESSAGING_INTERFACE,
+            )
+            self._prepare_added_watchers_for_modem_path_change()
+            self._modem_path = None
+            refreshed_path = await self.find_modem()
+            refreshed_path, proxy = await self._get_proxy_object("messaging object", refreshed_path)
+            messaging = self._get_proxy_interface(
+                proxy,
+                "messaging object",
+                refreshed_path,
+                MESSAGING_INTERFACE,
+            )
+            if resubscribe_added_watchers:
+                await self._resubscribe_added_watchers(refreshed_path)
+            return refreshed_path, cast(MessagingInterface, messaging)
+        if (
+            modem_path != requested_modem_path or self._added_watch_resubscribe_required
+        ) and resubscribe_added_watchers:
+            await self._resubscribe_added_watchers(modem_path)
         return modem_path, cast(
             MessagingInterface,
-            self._get_proxy_interface(proxy, "messaging object", modem_path, MESSAGING_INTERFACE),
+            messaging,
         )
 
     async def _get_sms_interface(self, sms_path: str) -> SmsInterface:
@@ -750,6 +857,7 @@ class ModemManagerClient:
         object_path: str,
         *,
         refresh_cached_modem: bool = False,
+        resubscribe_added_watchers: bool = True,
     ) -> tuple[str, ProxyObject]:
         try:
             return object_path, await self._get_proxy_object_once(object_path)
@@ -760,9 +868,11 @@ class ModemManagerClient:
                 and self._is_unknown_object_error(exc)
             ):
                 logger.info("modem_path_stale", modem_path=object_path)
+                self._prepare_added_watchers_for_modem_path_change()
                 self._modem_path = None
                 refreshed_path = await self.find_modem()
-                await self._resubscribe_added_watchers(refreshed_path)
+                if resubscribe_added_watchers:
+                    await self._resubscribe_added_watchers(refreshed_path)
                 return await self._get_proxy_object(object_kind, refreshed_path)
             raise ModemManagerUnavailable(f"failed to query {object_kind} {object_path}") from exc
 
@@ -777,8 +887,16 @@ class ModemManagerClient:
     def _is_unknown_object_error(self, exc: BaseException) -> bool:
         return isinstance(exc, DBusError) and exc.type == UNKNOWN_OBJECT_ERROR
 
+    def _is_stale_modem_path_error(self, exc: BaseException) -> bool:
+        if isinstance(exc, InterfaceNotFoundError):
+            return True
+        return self._is_unknown_object_error(exc)
+
     def _is_unknown_object_unavailable(self, exc: ModemManagerUnavailable) -> bool:
         return exc.__cause__ is not None and self._is_unknown_object_error(exc.__cause__)
+
+    def _is_stale_modem_path_unavailable(self, exc: ModemManagerUnavailable) -> bool:
+        return exc.__cause__ is not None and self._is_stale_modem_path_error(exc.__cause__)
 
     def _get_proxy_interface(
         self,
