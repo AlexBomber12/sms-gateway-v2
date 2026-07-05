@@ -231,8 +231,26 @@ class ModemManagerClient:
         logger.info("client_disconnected")
 
     async def find_modem(self) -> str:
-        bus = self._require_bus()
         started_at = time.monotonic()
+        modem_paths = await self._list_modem_paths()
+        if modem_paths:
+            modem_path = modem_paths[0]
+            self._modem_path = modem_path
+            logger.info(
+                "modem_found",
+                duration_seconds=time.monotonic() - started_at,
+                modem_path=modem_path,
+            )
+            return modem_path
+
+        logger.warning(
+            "modem_not_found",
+            duration_seconds=time.monotonic() - started_at,
+        )
+        raise ModemNotFound("no ModemManager modem object found")
+
+    async def _list_modem_paths(self) -> list[str]:
+        bus = self._require_bus()
         try:
             introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, MODEM_MANAGER_OBJECT_PATH)
             proxy = bus.get_proxy_object(
@@ -247,21 +265,11 @@ class ModemManagerClient:
         except DBUS_OPERATION_ERRORS as exc:
             raise ModemManagerUnavailable("failed to query ModemManager objects") from exc
 
-        for object_path, interfaces in managed_objects.items():
-            if MODEM_INTERFACE in interfaces:
-                self._modem_path = object_path
-                logger.info(
-                    "modem_found",
-                    duration_seconds=time.monotonic() - started_at,
-                    modem_path=object_path,
-                )
-                return object_path
-
-        logger.warning(
-            "modem_not_found",
-            duration_seconds=time.monotonic() - started_at,
-        )
-        raise ModemNotFound("no ModemManager modem object found")
+        return [
+            object_path
+            for object_path, interfaces in managed_objects.items()
+            if MODEM_INTERFACE in interfaces
+        ]
 
     async def get_modem_info(self) -> ModemInfo:
         started_at = time.monotonic()
@@ -618,8 +626,28 @@ class ModemManagerClient:
 
         while time.monotonic() - started_at < timeout_seconds:
             try:
-                modem_path = await self.find_modem()
-                if modem_path == reset_modem_path and not reset_modem_path_disappeared:
+                modem_paths = await self._list_modem_paths()
+                fresh_modem_path = next(
+                    (modem_path for modem_path in modem_paths if modem_path != reset_modem_path),
+                    None,
+                )
+                if fresh_modem_path is not None:
+                    modem_path = fresh_modem_path
+                elif reset_modem_path in modem_paths:
+                    if reset_modem_path_disappeared:
+                        modem_path = reset_modem_path
+                    else:
+                        self._modem_path = None
+                        elapsed_seconds = time.monotonic() - started_at
+                        remaining_seconds = timeout_seconds - elapsed_seconds
+                        if remaining_seconds <= 0:
+                            break
+                        await asyncio.sleep(
+                            min(_RESET_REAPPEAR_POLL_INTERVAL_SECONDS, remaining_seconds)
+                        )
+                        continue
+                else:
+                    reset_modem_path_disappeared = True
                     self._modem_path = None
                     elapsed_seconds = time.monotonic() - started_at
                     remaining_seconds = timeout_seconds - elapsed_seconds
@@ -629,6 +657,7 @@ class ModemManagerClient:
                         min(_RESET_REAPPEAR_POLL_INTERVAL_SECONDS, remaining_seconds)
                     )
                     continue
+                self._modem_path = modem_path
                 await self._subscribe_missing_added_watchers(modem_path)
             except ModemNotFound:
                 reset_modem_path_disappeared = True

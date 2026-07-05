@@ -392,6 +392,50 @@ async def test_reset_ignores_reset_modem_path_until_it_disappears(
     )
 
 
+async def test_reset_searches_past_reset_path_when_fresh_modem_is_already_exposed(
+    fake_bus: MagicMock,
+    fake_reset_proxy: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elapsed_seconds = make_fake_time(monkeypatch)
+    refreshed_messaging_proxy = make_fake_messaging_proxy()
+    both_paths_proxy = make_object_manager_proxy(
+        {
+            MODEM_PATH: {MODEM_INTERFACE: object()},
+            REDISCOVERED_MODEM_PATH: {MODEM_INTERFACE: object()},
+        }
+    )
+    fake_bus.get_proxy_object.side_effect = [
+        fake_reset_proxy,
+        both_paths_proxy,
+        refreshed_messaging_proxy,
+    ]
+    captured_logger = MagicMock()
+    monkeypatch.setattr("sms_gateway_v2.modem.client.logger", captured_logger)
+    client = ModemManagerClient(reset_reappear_timeout_seconds=10.0)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def callback(_sms_path: str) -> None:
+        return None
+
+    callback_key = client._callback_key(callback)
+    client._added_callbacks[callback_key] = callback
+    client._added_watch_keys.add((MODEM_PATH, callback_key))
+
+    await client.reset()
+
+    assert elapsed_seconds[0] == pytest.approx(0.0)
+    refreshed_messaging_proxy.messaging.on_added.assert_called_once()
+    assert client._modem_path == REDISCOVERED_MODEM_PATH
+    assert client._added_watch_keys == {(REDISCOVERED_MODEM_PATH, callback_key)}
+    captured_logger.info.assert_any_call(
+        "modem_reset_reappeared",
+        modem_path=REDISCOVERED_MODEM_PATH,
+        wait_seconds=pytest.approx(0.0),
+    )
+
+
 async def test_reset_returns_on_reappear_timeout_without_raising(
     fake_bus: MagicMock,
     fake_reset_proxy: MagicMock,
@@ -492,7 +536,65 @@ async def test_reset_reappear_wait_stops_when_poll_exhausts_timeout(
     async def callback(_sms_path: str) -> None:
         return None
 
-    async def find_modem() -> str:
+    async def list_modem_paths() -> list[str]:
+        elapsed_seconds[0] = 5.0
+        return []
+
+    callback_key = client._callback_key(callback)
+    client._added_callbacks[callback_key] = callback
+    client._added_watch_keys.add((MODEM_PATH, callback_key))
+    sleep = AsyncMock()
+    monkeypatch.setattr(client_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(client, "_list_modem_paths", list_modem_paths)
+
+    await client.reset()
+
+    sleep.assert_not_awaited()
+    assert elapsed_seconds[0] == pytest.approx(5.0)
+
+
+async def test_reset_reappear_wait_sleeps_when_modem_not_found_before_timeout(
+    fake_bus: MagicMock,
+    fake_reset_proxy: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elapsed_seconds = make_fake_time(monkeypatch)
+    fake_bus.get_proxy_object.return_value = fake_reset_proxy
+    client = ModemManagerClient(reset_reappear_timeout_seconds=2.0)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def callback(_sms_path: str) -> None:
+        return None
+
+    async def list_modem_paths() -> list[str]:
+        raise ModemNotFound("missing")
+
+    callback_key = client._callback_key(callback)
+    client._added_callbacks[callback_key] = callback
+    client._added_watch_keys.add((MODEM_PATH, callback_key))
+    monkeypatch.setattr(client, "_list_modem_paths", list_modem_paths)
+
+    await client.reset()
+
+    assert elapsed_seconds[0] == pytest.approx(2.0)
+
+
+async def test_reset_reappear_wait_stops_when_modem_not_found_exhausts_timeout(
+    fake_bus: MagicMock,
+    fake_reset_proxy: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elapsed_seconds = make_fake_time(monkeypatch)
+    fake_bus.get_proxy_object.return_value = fake_reset_proxy
+    client = ModemManagerClient(reset_reappear_timeout_seconds=5.0)
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    async def callback(_sms_path: str) -> None:
+        return None
+
+    async def list_modem_paths() -> list[str]:
         elapsed_seconds[0] = 5.0
         raise ModemNotFound("missing")
 
@@ -501,7 +603,7 @@ async def test_reset_reappear_wait_stops_when_poll_exhausts_timeout(
     client._added_watch_keys.add((MODEM_PATH, callback_key))
     sleep = AsyncMock()
     monkeypatch.setattr(client_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(client, "find_modem", find_modem)
+    monkeypatch.setattr(client, "_list_modem_paths", list_modem_paths)
 
     await client.reset()
 
@@ -523,16 +625,16 @@ async def test_reset_reappear_wait_stops_when_reset_path_poll_exhausts_timeout(
     async def callback(_sms_path: str) -> None:
         return None
 
-    async def find_modem() -> str:
+    async def list_modem_paths() -> list[str]:
         elapsed_seconds[0] = 5.0
-        return MODEM_PATH
+        return [MODEM_PATH]
 
     callback_key = client._callback_key(callback)
     client._added_callbacks[callback_key] = callback
     client._added_watch_keys.add((MODEM_PATH, callback_key))
     sleep = AsyncMock()
     monkeypatch.setattr(client_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(client, "find_modem", find_modem)
+    monkeypatch.setattr(client, "_list_modem_paths", list_modem_paths)
 
     await client.reset()
 
@@ -556,7 +658,7 @@ async def test_reset_reappear_wait_stops_when_modem_error_exhausts_timeout(
     async def callback(_sms_path: str) -> None:
         return None
 
-    async def find_modem() -> str:
+    async def list_modem_paths() -> list[str]:
         elapsed_seconds[0] = 5.0
         raise ModemManagerUnavailable("query failed")
 
@@ -565,7 +667,7 @@ async def test_reset_reappear_wait_stops_when_modem_error_exhausts_timeout(
     client._added_watch_keys.add((MODEM_PATH, callback_key))
     sleep = AsyncMock()
     monkeypatch.setattr(client_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(client, "find_modem", find_modem)
+    monkeypatch.setattr(client, "_list_modem_paths", list_modem_paths)
 
     await client.reset()
 
