@@ -191,8 +191,8 @@ class SmsRelay:
         messages: list[IncomingSms] = []
         count_scheduled_retry = 0
 
-        for sms_path in sms_paths:
-            async with self._sms_handler_lock:
+        async with self._sms_handler_lock:
+            for sms_path in sms_paths:
                 try:
                     sms = await self._modem_client.read_message(sms_path)
                 except MessageReadMissing as exc:
@@ -215,11 +215,10 @@ class SmsRelay:
                     continue
                 messages.append(sms)
 
-        # list_messages used to sort fully decoded messages by this key. Undecoded
-        # paths cannot contribute a timestamp yet, so they resume ordering on retry.
-        messages.sort(key=self._message_sort_key)
-        for message in messages:
-            async with self._sms_handler_lock:
+            # list_messages used to sort fully decoded messages by this key. Undecoded
+            # paths cannot contribute a timestamp yet, so they resume ordering on retry.
+            messages.sort(key=self._message_sort_key)
+            for message in messages:
                 await self._process_sms(message, fail_on_delete_error=True)
         logger.info(
             "relay_drain_completed",

@@ -95,6 +95,40 @@ async def test_start_rolls_back_when_drain_delete_fails(
     modem_client.delete_message.assert_awaited_once_with(sms.object_path)
 
 
+async def test_drain_holds_sms_lock_through_processing(
+    relay: SmsRelay,
+    modem_client: MagicMock,
+    queue: Queue,
+    sms_factory: SmsFactory,
+) -> None:
+    sms = sms_factory()
+    modem_client.list_sms_paths.return_value = [sms.object_path]
+    signal_task: asyncio.Task[None] | None = None
+    read_count = 0
+
+    async def read_message(sms_path: str) -> object:
+        nonlocal read_count, signal_task
+        read_count += 1
+        if read_count == 1:
+            signal_task = asyncio.create_task(relay._on_new_sms(sms_path))
+            await asyncio.sleep(0)
+        return sms
+
+    modem_client.read_message.side_effect = read_message
+    modem_client.delete_message.side_effect = [None, MessageDeleteFailed("already deleted")]
+    queue.enqueue = AsyncMock(wraps=queue.enqueue)
+
+    await queue.initialize()
+    await relay._drain_existing_messages()
+    if signal_task is None:
+        raise AssertionError("MessageAdded handler was not scheduled")
+    await signal_task
+
+    assert queue.enqueue.await_args_list[0] == call(sms)
+    assert modem_client.delete_message.await_args_list[0] == call(sms.object_path)
+    assert relay.state().last_error is None
+
+
 async def test_start_rollback_cancels_pending_text_retries(
     relay: SmsRelay,
     modem_client: MagicMock,
