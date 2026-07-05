@@ -542,10 +542,15 @@ class ModemManagerClient:
         modem_path: str,
         callback_key: CallbackKey,
         callback: AddedCallback,
+        *,
+        resubscribe_added_watchers: bool = True,
     ) -> None:
         watch_key = (modem_path, callback_key)
         if watch_key not in self._added_watch_keys:
-            modem_path, messaging = await self._get_messaging_interface(modem_path)
+            modem_path, messaging = await self._get_messaging_interface(
+                modem_path,
+                resubscribe_added_watchers=resubscribe_added_watchers,
+            )
             watch_key = (modem_path, callback_key)
             if watch_key not in self._added_watch_keys:
                 handler = self._build_added_handler(modem_path, callback)
@@ -583,7 +588,12 @@ class ModemManagerClient:
     async def _subscribe_missing_added_watchers(self, modem_path: str) -> None:
         self._added_watch_resubscribe_required = bool(self._added_callbacks)
         for callback_key, callback in self._added_callbacks.items():
-            await self._subscribe_added_watch(modem_path, callback_key, callback)
+            await self._subscribe_added_watch(
+                modem_path,
+                callback_key,
+                callback,
+                resubscribe_added_watchers=False,
+            )
         self._added_watch_resubscribe_required = self._needs_added_watch_resubscribe()
 
     async def _resubscribe_added_watchers_after_reconnect(self) -> None:
@@ -785,7 +795,9 @@ class ModemManagerClient:
             if resubscribe_added_watchers:
                 await self._resubscribe_added_watchers(refreshed_path)
             return refreshed_path, cast(MessagingInterface, messaging)
-        if modem_path != requested_modem_path and resubscribe_added_watchers:
+        if (
+            modem_path != requested_modem_path or self._added_watch_resubscribe_required
+        ) and resubscribe_added_watchers:
             await self._resubscribe_added_watchers(modem_path)
         return modem_path, cast(
             MessagingInterface,
