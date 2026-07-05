@@ -215,16 +215,21 @@ class Queue:
                 elapsed_ms=_elapsed_ms(started_at),
             )
 
-    async def mark_failed(self, item: QueueItem) -> None:
+    async def mark_failed(self, item: QueueItem, *, permanently_failed: bool = False) -> None:
         started_at = time.monotonic()
         async with self._lock:
             self._dirs_or_raise()
-            await self._move_from_processing(item, self._dirs["failed"])
+            updated = item.model_copy(update={"permanently_failed": permanently_failed})
+            if not (self._dirs["processing"] / f"{item.id}.json").exists():
+                raise ItemNotFound(f"queue item not found in processing: {item.id}")
+            await asyncio.to_thread(save_item, updated, self._dirs["processing"])
+            await self._move_from_processing(updated, self._dirs["failed"])
             await self._dedup.update_status(self._content_hash_for_item(item), ItemStatus.FAILED)
             logger.info(
                 "queue_item_failed",
                 item_id=item.id,
                 attempts=item.attempts,
+                permanently_failed=permanently_failed,
                 elapsed_ms=_elapsed_ms(started_at),
             )
 
@@ -319,6 +324,14 @@ class Queue:
                         payload_item_id=item.id,
                         path=str(path),
                         error="queue item id does not match filename",
+                        elapsed_ms=_elapsed_ms(started_at),
+                    )
+                    continue
+                if item.permanently_failed:
+                    logger.info(
+                        "queue_failed_item_skipped_permanent",
+                        item_id=item.id,
+                        path=str(path),
                         elapsed_ms=_elapsed_ms(started_at),
                     )
                     continue

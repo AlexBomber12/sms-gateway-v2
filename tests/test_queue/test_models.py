@@ -19,7 +19,18 @@ def test_queue_item_new_generates_timestamp_uuid_id(sample_sms: IncomingSms) -> 
     assert item.content_hash is None
     assert item.attempts == 0
     assert item.last_attempt_at is None
+    assert item.permanently_failed is False
     assert item.next_retry_at is None
+
+
+def test_queue_item_defaults_permanently_failed_to_false(sample_sms: IncomingSms) -> None:
+    item = QueueItem(
+        id="1714149693000-0123456789abcdef0123456789abcdef",
+        sms=sample_sms,
+        first_seen_at=datetime(2026, 4, 26, 10, 41, 33, tzinfo=UTC),
+    )
+
+    assert item.permanently_failed is False
 
 
 def test_queue_item_json_round_trips(sample_sms: IncomingSms) -> None:

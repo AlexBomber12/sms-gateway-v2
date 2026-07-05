@@ -35,6 +35,7 @@ async def test_transport_error_schedules_retry(
     after = datetime.now(UTC) + timedelta(seconds=1)
     pending_item = load_item(queue._dirs["pending"] / f"{item.id}.json")
     assert pending_item.attempts == 1
+    assert pending_item.permanently_failed is False
     assert pending_item.next_retry_at is not None
     assert before <= pending_item.next_retry_at <= after
     assert not (queue._dirs["processing"] / f"{item.id}.json").exists()
@@ -82,6 +83,7 @@ async def test_generic_telegram_error_fails_permanently_without_retry(
     assert await worker._process_one_pending_item() is True
 
     assert (queue._dirs["failed"] / f"{item.id}.json").exists()
+    assert load_item(queue._dirs["failed"] / f"{item.id}.json").permanently_failed is True
     assert not (queue._dirs["pending"] / f"{item.id}.json").exists()
     assert metric_value(metrics, "sms_failed_total") == 1.0
     assert metric_value(metrics, "telegram_send_total", {"result": "failure"}) == 1.0
@@ -152,6 +154,7 @@ async def test_transport_error_exhausts_retry_budget(
     assert await worker._process_one_pending_item() is True
 
     assert (queue._dirs["failed"] / f"{item.id}.json").exists()
+    assert load_item(queue._dirs["failed"] / f"{item.id}.json").permanently_failed is True
     assert metric_value(metrics, "sms_failed_total") == 1.0
     assert metric_value(metrics, "telegram_send_total", {"result": "failure"}) == 1.0
     assert metric_value(metrics, "telegram_send_failures_total", {"reason": "exhausted"}) == 1.0
