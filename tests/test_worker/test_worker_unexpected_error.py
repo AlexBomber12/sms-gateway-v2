@@ -56,6 +56,7 @@ async def test_invalid_queued_sms_moves_item_to_failed_without_sending(
     assert await worker._process_one_pending_item() is True
 
     assert (queue._dirs["failed"] / f"{item.id}.json").exists()
+    assert load_item(queue._dirs["failed"] / f"{item.id}.json").permanently_failed is True
     assert not (queue._dirs["processing"] / f"{item.id}.json").exists()
     assert metric_value(metrics, "sms_failed_total") == 1.0
     assert metric_value(metrics, "telegram_send_total", {"result": "failure"}) == 0.0

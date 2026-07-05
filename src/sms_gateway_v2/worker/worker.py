@@ -90,7 +90,7 @@ class DeliveryWorker:
                 error=str(exc),
             )
             self._metrics.sms_failed_total.inc()
-            await self._queue.mark_failed(item)
+            await self._queue.mark_failed(item, permanently_failed=True)
             return True
         except TelegramAuthError:
             logger.warning(
