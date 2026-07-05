@@ -856,8 +856,7 @@ class ModemManagerClient:
                 and self._is_unknown_object_error(exc)
             ):
                 logger.info("modem_path_stale", modem_path=object_path)
-                if resubscribe_added_watchers:
-                    self._prepare_added_watchers_for_modem_path_change()
+                self._prepare_added_watchers_for_modem_path_change()
                 self._modem_path = None
                 refreshed_path = await self.find_modem()
                 if resubscribe_added_watchers:

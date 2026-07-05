@@ -205,6 +205,55 @@ async def test_watch_added_resubscribes_after_cached_modem_path_refresh(
     assert received_paths == [SMS_PATH]
 
 
+async def test_watch_added_rebinds_after_deferred_same_path_proxy_refresh(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    refreshed_messaging_proxy = make_fake_messaging_proxy()
+    object_manager = MagicMock()
+    object_manager.call_get_managed_objects = AsyncMock(
+        return_value={MODEM_PATH: {MODEM_INTERFACE: object()}}
+    )
+    object_manager_proxy = MagicMock()
+    object_manager_proxy.get_interface.return_value = object_manager
+    fake_bus.introspect.side_effect = [
+        object(),
+        DBusError(UNKNOWN_OBJECT_ERROR, "stale modem path"),
+        object(),
+        object(),
+        object(),
+    ]
+    fake_bus.get_proxy_object.side_effect = [
+        fake_messaging_proxy,
+        object_manager_proxy,
+        fake_modem_proxy,
+        refreshed_messaging_proxy,
+    ]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    received_paths: list[str] = []
+    signal_received = asyncio.Event()
+
+    async def callback(sms_path: str) -> None:
+        received_paths.append(sms_path)
+        signal_received.set()
+
+    await client.watch_added(callback)
+    callback_key = client._callback_key(callback)
+    await client.get_signal_quality()
+    refreshed_messaging_proxy.messaging.added_handler(SMS_PATH, True)
+    await asyncio.wait_for(signal_received.wait(), timeout=1)
+    await wait_for_watch_tasks(client)
+
+    fake_messaging_proxy.messaging.off_added.assert_called_once()
+    refreshed_messaging_proxy.messaging.on_added.assert_called_once()
+    assert (MODEM_PATH, callback_key) in client._added_watch_keys
+    assert client._added_watch_resubscribe_required is False
+    assert received_paths == [SMS_PATH]
+
+
 async def test_message_added_subscription_follows_modem_path_after_refresh(
     fake_bus: MagicMock,
     fake_messaging_proxy: MagicMock,
@@ -337,6 +386,53 @@ async def test_message_added_subscription_rebinds_after_partial_refresh_failure(
     client.find_modem.assert_awaited_once_with()
     refreshed_messaging_proxy.messaging.on_added.assert_called_once()
     assert (REFRESHED_MODEM_PATH, callback_key) in client._added_watch_keys
+    assert client._added_watch_resubscribe_required is False
+
+
+async def test_message_added_subscription_rebinds_after_deferred_find_modem_failure(
+    fake_bus: MagicMock,
+    fake_messaging_proxy: MagicMock,
+    fake_modem_proxy: MagicMock,
+) -> None:
+    refreshed_messaging_proxy = make_fake_messaging_proxy()
+    fake_bus.introspect.side_effect = [
+        object(),
+        DBusError(UNKNOWN_OBJECT_ERROR, "stale modem path"),
+    ]
+    fake_bus.get_proxy_object.side_effect = [fake_messaging_proxy]
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+    callback = AsyncMock()
+
+    await client.watch_added(callback)
+    callback_key = client._callback_key(callback)
+    client.find_modem = AsyncMock(side_effect=ModemNotFound("no modem"))
+
+    with pytest.raises(ModemNotFound, match="no modem"):
+        await client.get_signal_quality()
+
+    fake_messaging_proxy.messaging.off_added.assert_called_once()
+    assert client._modem_path is None
+    assert client._added_watch_resubscribe_required is True
+    assert client._added_watch_keys == set()
+
+    async def refresh_modem() -> str:
+        client._modem_path = MODEM_PATH
+        return MODEM_PATH
+
+    client.find_modem = AsyncMock(side_effect=refresh_modem)
+    fake_bus.introspect.side_effect = [object(), object()]
+    fake_bus.get_proxy_object.side_effect = [
+        refreshed_messaging_proxy,
+        fake_modem_proxy,
+    ]
+
+    signal = await client.get_signal_quality()
+
+    assert signal.percent == 76
+    refreshed_messaging_proxy.messaging.on_added.assert_called_once()
+    assert (MODEM_PATH, callback_key) in client._added_watch_keys
     assert client._added_watch_resubscribe_required is False
 
 
