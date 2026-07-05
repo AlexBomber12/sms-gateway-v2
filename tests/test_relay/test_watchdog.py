@@ -176,6 +176,28 @@ async def test_poll_failure_does_not_increment_counters_or_reset(
     assert metrics.registry.get_sample_value("modem_resets_total") == 0.0
 
 
+async def test_poll_failure_reports_modem_health_unavailable(
+    modem_client: MagicMock,
+    metrics: MetricsRegistry,
+) -> None:
+    captured: list[tuple[str, int | None, str | None, str]] = []
+    modem_client.get_signal_quality.side_effect = ModemError("boom")
+    watchdog = ModemWatchdog(
+        modem_client=modem_client,
+        metrics=metrics,
+        interval_seconds=60.0,
+        signal_zero_threshold=3,
+        bad_state_minutes=10,
+        modem_health_callback=lambda state, signal_percent, operator, registration: captured.append(
+            (state, signal_percent, operator, registration)
+        ),
+    )
+
+    await watchdog._poll_once()
+
+    assert captured == [("unavailable", None, None, "unknown")]
+
+
 async def test_run_loops_until_stop_called(
     watchdog: ModemWatchdog,
     modem_client: MagicMock,
@@ -323,6 +345,7 @@ async def test_watchdog_updates_modem_fields_on_state(
     await watchdog._poll_once()
 
     assert captured == [("registered", 83, "vodafone IT", "home")]
+    modem_client.get_operator_name.assert_awaited_once_with()
 
 
 async def test_watchdog_reports_registration_issue_as_modem_state(
@@ -350,3 +373,41 @@ async def test_watchdog_reports_registration_issue_as_modem_state(
     await watchdog._poll_once()
 
     assert captured == [("searching", 83, "vodafone IT", "searching")]
+
+
+@pytest.mark.parametrize(
+    ("registration", "expected_state"),
+    [
+        (RegistrationState.IDLE, "idle"),
+        (RegistrationState.EMERGENCY_ONLY, "emergency_only"),
+        (RegistrationState.HOME, "registered"),
+        (RegistrationState.ROAMING, "registered"),
+    ],
+)
+async def test_watchdog_reports_only_actual_registration_states_as_registered(
+    modem_client: MagicMock,
+    metrics: MetricsRegistry,
+    registration: RegistrationState,
+    expected_state: str,
+) -> None:
+    captured: list[tuple[str, int | None, str | None, str]] = []
+    _set_health_reads(
+        modem_client,
+        signal=_signal(83),
+        registration=registration,
+        operator="vodafone IT",
+    )
+    watchdog = ModemWatchdog(
+        modem_client=modem_client,
+        metrics=metrics,
+        interval_seconds=60.0,
+        signal_zero_threshold=3,
+        bad_state_minutes=10,
+        modem_health_callback=lambda state, signal_percent, operator, registration: captured.append(
+            (state, signal_percent, operator, registration)
+        ),
+    )
+
+    await watchdog._poll_once()
+
+    assert captured == [(expected_state, 83, "vodafone IT", registration.value)]

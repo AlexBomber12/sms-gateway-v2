@@ -18,14 +18,17 @@ ModemHealthCallback = Callable[
     None,
 ]
 
-_BAD_REGISTRATION_STATES = frozenset(
+_REGISTERED_REGISTRATION_STATES = frozenset(
     {
-        RegistrationState.DENIED,
-        RegistrationState.SEARCHING,
-        RegistrationState.UNKNOWN,
+        RegistrationState.HOME,
+        RegistrationState.ROAMING,
+        RegistrationState.HOME_SMS_ONLY,
+        RegistrationState.ROAMING_SMS_ONLY,
+        RegistrationState.HOME_CSFB_NOT_PREFERRED,
+        RegistrationState.ROAMING_CSFB_NOT_PREFERRED,
     }
 )
-_REGISTERED_REGISTRATION_STATES = frozenset(RegistrationState) - _BAD_REGISTRATION_STATES
+_BAD_REGISTRATION_STATES = frozenset(RegistrationState) - _REGISTERED_REGISTRATION_STATES
 
 
 class ModemWatchdog:
@@ -63,6 +66,7 @@ class ModemWatchdog:
             state = await self._modem_client.get_registration_state()
         except ModemError as exc:
             logger.warning("watchdog_poll_failed", error=str(exc))
+            self._mark_modem_health_unavailable()
             return
         operator = await self._read_operator_name()
         signal_percent = signal.percent
@@ -125,6 +129,10 @@ class ModemWatchdog:
         except ModemError as exc:
             logger.warning("watchdog_operator_name_read_failed", error=str(exc))
             return None
+
+    def _mark_modem_health_unavailable(self) -> None:
+        if self._modem_health_callback is not None:
+            self._modem_health_callback("unavailable", None, None, "unknown")
 
     @staticmethod
     def _modem_state_from_registration(registration: RegistrationState) -> str:
