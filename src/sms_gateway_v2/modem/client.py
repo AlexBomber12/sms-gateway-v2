@@ -93,6 +93,7 @@ DBUS_OPERATION_ERRORS = (
     SignalDisabledError,
     SignatureBodyMismatchError,
 )
+_RESET_REAPPEAR_POLL_INTERVAL_SECONDS = 2.0
 
 ManagedObjects = dict[str, dict[str, object]]
 PropertyValue = TypeVar("PropertyValue")
@@ -170,10 +171,15 @@ class DBusPropertiesInterface(Protocol):
 
 
 class ModemManagerClient:
-    def __init__(self, sms_text_wait_timeout_seconds: float | None = None) -> None:
+    def __init__(
+        self,
+        sms_text_wait_timeout_seconds: float | None = None,
+        reset_reappear_timeout_seconds: float | None = None,
+    ) -> None:
         self._bus: MessageBus | None = None
         self._modem_path: str | None = None
         self._sms_text_wait_timeout_seconds = sms_text_wait_timeout_seconds
+        self._reset_reappear_timeout_seconds = reset_reappear_timeout_seconds
         self._watch_tasks: set[asyncio.Future[None]] = set()
         self._added_callbacks: dict[CallbackKey, AddedCallback] = {}
         self._added_watch_keys: set[tuple[str, CallbackKey]] = set()
@@ -225,8 +231,26 @@ class ModemManagerClient:
         logger.info("client_disconnected")
 
     async def find_modem(self) -> str:
-        bus = self._require_bus()
         started_at = time.monotonic()
+        modem_paths = await self._list_modem_paths()
+        if modem_paths:
+            modem_path = modem_paths[0]
+            self._modem_path = modem_path
+            logger.info(
+                "modem_found",
+                duration_seconds=time.monotonic() - started_at,
+                modem_path=modem_path,
+            )
+            return modem_path
+
+        logger.warning(
+            "modem_not_found",
+            duration_seconds=time.monotonic() - started_at,
+        )
+        raise ModemNotFound("no ModemManager modem object found")
+
+    async def _list_modem_paths(self) -> list[str]:
+        bus = self._require_bus()
         try:
             introspection = await bus.introspect(MODEM_MANAGER_BUS_NAME, MODEM_MANAGER_OBJECT_PATH)
             proxy = bus.get_proxy_object(
@@ -241,21 +265,11 @@ class ModemManagerClient:
         except DBUS_OPERATION_ERRORS as exc:
             raise ModemManagerUnavailable("failed to query ModemManager objects") from exc
 
-        for object_path, interfaces in managed_objects.items():
-            if MODEM_INTERFACE in interfaces:
-                self._modem_path = object_path
-                logger.info(
-                    "modem_found",
-                    duration_seconds=time.monotonic() - started_at,
-                    modem_path=object_path,
-                )
-                return object_path
-
-        logger.warning(
-            "modem_not_found",
-            duration_seconds=time.monotonic() - started_at,
-        )
-        raise ModemNotFound("no ModemManager modem object found")
+        return [
+            object_path
+            for object_path, interfaces in managed_objects.items()
+            if MODEM_INTERFACE in interfaces
+        ]
 
     async def get_modem_info(self) -> ModemInfo:
         started_at = time.monotonic()
@@ -374,6 +388,8 @@ class ModemManagerClient:
         self._modem_path = None
         self._unsubscribe_all_added_watchers()
         self._added_watch_resubscribe_required = bool(self._added_callbacks)
+        if self._added_watch_resubscribe_required:
+            await self._wait_for_reset_reappear(modem_path)
 
     async def list_messages(self) -> list[IncomingSms]:
         modem_path = await self._ensure_modem_path()
@@ -600,6 +616,76 @@ class ModemManagerClient:
         if self._added_watch_resubscribe_required:
             modem_path = await self.find_modem()
             await self._subscribe_missing_added_watchers(modem_path)
+
+    async def _wait_for_reset_reappear(self, reset_modem_path: str) -> None:
+        timeout_seconds = self._reset_reappear_timeout_seconds
+        if timeout_seconds is None:
+            timeout_seconds = get_settings().modem_reset_reappear_timeout_seconds
+        started_at = time.monotonic()
+        reset_modem_path_disappeared = False
+
+        while time.monotonic() - started_at < timeout_seconds:
+            try:
+                modem_paths = await self._list_modem_paths()
+                fresh_modem_path = next(
+                    (modem_path for modem_path in modem_paths if modem_path != reset_modem_path),
+                    None,
+                )
+                if fresh_modem_path is not None:
+                    modem_path = fresh_modem_path
+                elif reset_modem_path in modem_paths:
+                    if reset_modem_path_disappeared:
+                        modem_path = reset_modem_path
+                    else:
+                        self._modem_path = None
+                        elapsed_seconds = time.monotonic() - started_at
+                        remaining_seconds = timeout_seconds - elapsed_seconds
+                        if remaining_seconds <= 0:
+                            break
+                        await asyncio.sleep(
+                            min(_RESET_REAPPEAR_POLL_INTERVAL_SECONDS, remaining_seconds)
+                        )
+                        continue
+                else:
+                    reset_modem_path_disappeared = True
+                    self._modem_path = None
+                    elapsed_seconds = time.monotonic() - started_at
+                    remaining_seconds = timeout_seconds - elapsed_seconds
+                    if remaining_seconds <= 0:
+                        break
+                    await asyncio.sleep(
+                        min(_RESET_REAPPEAR_POLL_INTERVAL_SECONDS, remaining_seconds)
+                    )
+                    continue
+                self._modem_path = modem_path
+                await self._subscribe_missing_added_watchers(modem_path)
+            except ModemNotFound:
+                reset_modem_path_disappeared = True
+                elapsed_seconds = time.monotonic() - started_at
+                remaining_seconds = timeout_seconds - elapsed_seconds
+                if remaining_seconds <= 0:
+                    break
+                await asyncio.sleep(min(_RESET_REAPPEAR_POLL_INTERVAL_SECONDS, remaining_seconds))
+                continue
+            except ModemError:
+                elapsed_seconds = time.monotonic() - started_at
+                remaining_seconds = timeout_seconds - elapsed_seconds
+                if remaining_seconds <= 0:
+                    break
+                await asyncio.sleep(min(_RESET_REAPPEAR_POLL_INTERVAL_SECONDS, remaining_seconds))
+                continue
+
+            logger.info(
+                "modem_reset_reappeared",
+                modem_path=modem_path,
+                wait_seconds=time.monotonic() - started_at,
+            )
+            return
+
+        logger.warning(
+            "modem_reset_reappear_timeout",
+            wait_seconds=time.monotonic() - started_at,
+        )
 
     def _needs_added_watch_resubscribe(self) -> bool:
         if not self._added_callbacks:
