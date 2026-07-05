@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     modem_watchdog_signal_zero_threshold: int = Field(default=5, ge=1)
     modem_watchdog_bad_state_minutes: int = Field(default=10, ge=1)
     modem_sms_text_wait_timeout_seconds: float = Field(default=5.0, ge=0.0)
+    modem_reset_reappear_timeout_seconds: float = Field(default=45.0, ge=5.0, le=180.0)
     cleanup_interval_seconds: float = Field(default=3600.0, ge=60.0)
     heartbeat_enabled: bool = True
     heartbeat_interval_seconds: float = Field(default=86400.0, ge=60.0)

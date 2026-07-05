@@ -93,6 +93,7 @@ DBUS_OPERATION_ERRORS = (
     SignalDisabledError,
     SignatureBodyMismatchError,
 )
+_RESET_REAPPEAR_POLL_INTERVAL_SECONDS = 2.0
 
 ManagedObjects = dict[str, dict[str, object]]
 PropertyValue = TypeVar("PropertyValue")
@@ -170,10 +171,15 @@ class DBusPropertiesInterface(Protocol):
 
 
 class ModemManagerClient:
-    def __init__(self, sms_text_wait_timeout_seconds: float | None = None) -> None:
+    def __init__(
+        self,
+        sms_text_wait_timeout_seconds: float | None = None,
+        reset_reappear_timeout_seconds: float | None = None,
+    ) -> None:
         self._bus: MessageBus | None = None
         self._modem_path: str | None = None
         self._sms_text_wait_timeout_seconds = sms_text_wait_timeout_seconds
+        self._reset_reappear_timeout_seconds = reset_reappear_timeout_seconds
         self._watch_tasks: set[asyncio.Future[None]] = set()
         self._added_callbacks: dict[CallbackKey, AddedCallback] = {}
         self._added_watch_keys: set[tuple[str, CallbackKey]] = set()
@@ -374,6 +380,8 @@ class ModemManagerClient:
         self._modem_path = None
         self._unsubscribe_all_added_watchers()
         self._added_watch_resubscribe_required = bool(self._added_callbacks)
+        if self._added_watch_resubscribe_required:
+            await self._wait_for_reset_reappear()
 
     async def list_messages(self) -> list[IncomingSms]:
         modem_path = await self._ensure_modem_path()
@@ -600,6 +608,36 @@ class ModemManagerClient:
         if self._added_watch_resubscribe_required:
             modem_path = await self.find_modem()
             await self._subscribe_missing_added_watchers(modem_path)
+
+    async def _wait_for_reset_reappear(self) -> None:
+        timeout_seconds = self._reset_reappear_timeout_seconds
+        if timeout_seconds is None:
+            timeout_seconds = get_settings().modem_reset_reappear_timeout_seconds
+        started_at = time.monotonic()
+
+        while time.monotonic() - started_at < timeout_seconds:
+            try:
+                modem_path = await self.find_modem()
+                await self._subscribe_missing_added_watchers(modem_path)
+            except ModemError:
+                elapsed_seconds = time.monotonic() - started_at
+                remaining_seconds = timeout_seconds - elapsed_seconds
+                if remaining_seconds <= 0:
+                    break
+                await asyncio.sleep(min(_RESET_REAPPEAR_POLL_INTERVAL_SECONDS, remaining_seconds))
+                continue
+
+            logger.info(
+                "modem_reset_reappeared",
+                modem_path=modem_path,
+                wait_seconds=time.monotonic() - started_at,
+            )
+            return
+
+        logger.warning(
+            "modem_reset_reappear_timeout",
+            wait_seconds=time.monotonic() - started_at,
+        )
 
     def _needs_added_watch_resubscribe(self) -> bool:
         if not self._added_callbacks:
