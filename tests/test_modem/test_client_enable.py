@@ -102,6 +102,28 @@ async def test_enable_translates_dbus_error(
     assert exc.value.__cause__ is error
 
 
+async def test_enable_preserves_dbus_error_text_for_invalid_transition(
+    fake_bus: MagicMock,
+    fake_modem_proxy: MagicMock,
+    fake_modem_props: MagicMock,
+) -> None:
+    error = DBusError(
+        "org.freedesktop.ModemManager1.Error.Core.Retry",
+        "Invalid transition",
+    )
+    fake_modem_props.call_enable.side_effect = error
+    fake_bus.get_proxy_object.return_value = fake_modem_proxy
+    client = ModemManagerClient()
+    client._bus = fake_bus
+    client._modem_path = MODEM_PATH
+
+    with pytest.raises(ModemManagerUnavailable) as exc:
+        await client.enable()
+
+    assert "Invalid transition" in str(exc.value)
+    assert exc.value.__cause__ is error
+
+
 async def test_enable_recovers_from_interface_not_found_on_cached_path(
     fake_bus: MagicMock,
 ) -> None:

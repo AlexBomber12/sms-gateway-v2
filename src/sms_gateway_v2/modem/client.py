@@ -431,7 +431,7 @@ class ModemManagerClient:
         try:
             await modem.call_enable(True)
         except DBUS_OPERATION_ERRORS as exc:
-            raise ModemManagerUnavailable(f"failed to enable modem at {modem_path}") from exc
+            raise ModemManagerUnavailable(f"failed to enable modem at {modem_path}: {exc}") from exc
 
         logger.info(
             "modem_enable_called",
