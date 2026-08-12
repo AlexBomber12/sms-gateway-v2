@@ -69,6 +69,8 @@ def test_build_relay_uses_configured_watchdog_settings(tmp_path: Path) -> None:
         modem_watchdog_interval_seconds=15.0,
         modem_watchdog_signal_zero_threshold=2,
         modem_watchdog_bad_state_minutes=4,
+        modem_watchdog_enable_cooldown_seconds=90.0,
+        modem_watchdog_enable_frozen_cooldown_seconds=900.0,
     )
     metrics = MetricsRegistry()
 
@@ -77,6 +79,8 @@ def test_build_relay_uses_configured_watchdog_settings(tmp_path: Path) -> None:
     assert watchdog._interval_seconds == 15.0
     assert watchdog._signal_zero_threshold == 2
     assert watchdog._bad_state_minutes == 4
+    assert watchdog._enable_cooldown_seconds == 90.0
+    assert watchdog._enable_frozen_cooldown_seconds == 900.0
 
 
 def test_build_relay_uses_configured_cleanup_settings(tmp_path: Path) -> None:
