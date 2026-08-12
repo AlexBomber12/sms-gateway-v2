@@ -129,6 +129,8 @@ class ModemInterface(Protocol):
 
     async def call_reset(self) -> None: ...
 
+    async def call_enable(self, enable: bool) -> None: ...
+
 
 class Modem3gppInterface(Protocol):
     async def get_registration_state(self) -> int: ...
@@ -373,6 +375,21 @@ class ModemManagerClient:
         )
         return registration
 
+    async def get_modem_state(self) -> str:
+        started_at = time.monotonic()
+        modem_path, modem = await self._get_modem_interface(MODEM_INTERFACE)
+        modem = cast(ModemInterface, modem)
+
+        raw_state = await self._read_required("State", modem.get_state)
+        state = self._decode_modem_state(raw_state)
+        logger.info(
+            "modem_state_read",
+            duration_seconds=time.monotonic() - started_at,
+            modem_path=modem_path,
+            state=state,
+        )
+        return state
+
     async def get_operator_name(self) -> str:
         started_at = time.monotonic()
         modem_path, modem_3gpp = await self._get_modem_interface(MODEM_3GPP_INTERFACE)
@@ -406,6 +423,21 @@ class ModemManagerClient:
         self._added_watch_resubscribe_required = bool(self._added_callbacks)
         if self._added_watch_resubscribe_required:
             await self._wait_for_reset_reappear(modem_path)
+
+    async def enable(self) -> None:
+        started_at = time.monotonic()
+        modem_path, modem = await self._get_modem_interface(MODEM_INTERFACE)
+        modem = cast(ModemInterface, modem)
+        try:
+            await modem.call_enable(True)
+        except DBUS_OPERATION_ERRORS as exc:
+            raise ModemManagerUnavailable(f"failed to enable modem at {modem_path}") from exc
+
+        logger.info(
+            "modem_enable_called",
+            duration_seconds=time.monotonic() - started_at,
+            modem_path=modem_path,
+        )
 
     async def list_messages(self) -> list[IncomingSms]:
         modem_path = await self._ensure_modem_path()

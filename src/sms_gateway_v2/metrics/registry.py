@@ -17,6 +17,7 @@ last_telegram_success_seconds = "last_telegram_success_seconds"
 modem_signal_percent = "modem_signal_percent"
 modem_state = "modem_state"
 modem_resets_total = "modem_resets_total"
+modem_enables_total = "modem_enables_total"
 telegram_send_duration_seconds = "telegram_send_duration_seconds"
 telegram_send_total = "telegram_send_total"
 telegram_send_failures_total = "telegram_send_failures_total"
@@ -100,6 +101,11 @@ class MetricsRegistry:
         self.modem_resets_total = Counter(
             modem_resets_total,
             "Total modem reset operations performed by the watchdog.",
+            registry=self.registry,
+        )
+        self.modem_enables_total = Counter(
+            modem_enables_total,
+            "Total successful modem enable calls issued by the watchdog.",
             registry=self.registry,
         )
         self.telegram_send_duration_seconds = Histogram(

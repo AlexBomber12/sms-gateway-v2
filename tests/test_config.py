@@ -25,6 +25,8 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.delenv("WORKER_RETRY_SCHEDULE_SECONDS", raising=False)
     monkeypatch.delenv("METRICS_PATH", raising=False)
     monkeypatch.delenv("SMS_GATEWAY_GROUP_GID", raising=False)
+    monkeypatch.delenv("MODEM_WATCHDOG_ENABLE_COOLDOWN_SECONDS", raising=False)
+    monkeypatch.delenv("MODEM_WATCHDOG_ENABLE_FROZEN_COOLDOWN_SECONDS", raising=False)
     monkeypatch.delenv("MODEM_SMS_TEXT_WAIT_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("MODEM_SMS_TEXT_UNDECODED_RETRY_MAX_ATTEMPTS", raising=False)
     monkeypatch.delenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", raising=False)
@@ -47,6 +49,8 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.worker_retry_schedule_seconds == (5, 30, 300, 1800, 7200, 21600, 86400)
     assert settings.metrics_path == "/metrics"
     assert settings.sms_gateway_group_gid == ""
+    assert settings.modem_watchdog_enable_cooldown_seconds == 120.0
+    assert settings.modem_watchdog_enable_frozen_cooldown_seconds == 1800.0
     assert settings.modem_sms_text_wait_timeout_seconds == 5.0
     assert settings.modem_sms_text_undecoded_retry_max_attempts == 3
     assert settings.modem_sms_text_undecoded_retry_delay_seconds == 30.0
@@ -74,6 +78,8 @@ def test_settings_env_overrides_defaults(
     monkeypatch.setenv("WORKER_RETRY_SCHEDULE_SECONDS", "1,2,4")
     monkeypatch.setenv("METRICS_PATH", "/custom-metrics")
     monkeypatch.setenv("SMS_GATEWAY_GROUP_GID", "995")
+    monkeypatch.setenv("MODEM_WATCHDOG_ENABLE_COOLDOWN_SECONDS", "240.5")
+    monkeypatch.setenv("MODEM_WATCHDOG_ENABLE_FROZEN_COOLDOWN_SECONDS", "3600.5")
     monkeypatch.setenv("MODEM_SMS_TEXT_WAIT_TIMEOUT_SECONDS", "0.5")
     monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_MAX_ATTEMPTS", "4")
     monkeypatch.setenv("MODEM_SMS_TEXT_UNDECODED_RETRY_DELAY_SECONDS", "45.5")
@@ -96,6 +102,8 @@ def test_settings_env_overrides_defaults(
     assert settings.worker_retry_schedule_seconds == (1, 2, 4)
     assert settings.metrics_path == "/custom-metrics"
     assert settings.sms_gateway_group_gid == "995"
+    assert settings.modem_watchdog_enable_cooldown_seconds == 240.5
+    assert settings.modem_watchdog_enable_frozen_cooldown_seconds == 3600.5
     assert settings.modem_sms_text_wait_timeout_seconds == 0.5
     assert settings.modem_sms_text_undecoded_retry_max_attempts == 4
     assert settings.modem_sms_text_undecoded_retry_delay_seconds == 45.5

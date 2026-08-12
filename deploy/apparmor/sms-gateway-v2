@@ -67,6 +67,7 @@ profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
   #   - DBus.Properties on Sms objects to read Number/Text/Timestamp/PduType
   #   - Modem.Messaging.{List,Delete} to enumerate and remove processed SMSes
   #   - Modem.Reset for the watchdog reset path
+  #   - Modem.Enable for disabled-state recovery
   # It never calls methods on the org.freedesktop.ModemManager1.Sms interface.
   # If a future feature requires sending or storing SMS, narrow rules for those
   # specific members must be added here, not a member=* wildcard.
@@ -84,7 +85,7 @@ profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
     bus=system
     path=/org/freedesktop/ModemManager1/Modem/**
     interface=org.freedesktop.ModemManager1.Modem
-    member=Reset,
+    member={Reset,Enable},
 
   dbus (send)
     bus=system

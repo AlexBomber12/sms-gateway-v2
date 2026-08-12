@@ -6,6 +6,7 @@ from sms_gateway_v2.metrics import (
     MetricsRegistry,
     last_sms_received_seconds,
     last_telegram_success_seconds,
+    modem_enables_total,
     modem_resets_total,
     modem_signal_percent,
     modem_state,
@@ -40,6 +41,7 @@ METRIC_NAMES = [
     modem_signal_percent,
     modem_state,
     modem_resets_total,
+    modem_enables_total,
     telegram_send_duration_seconds,
     telegram_send_total,
     telegram_send_failures_total,
@@ -50,7 +52,7 @@ def test_metrics_registry_creates_all_metrics_on_fresh_collector_registry() -> N
     registry = MetricsRegistry()
 
     assert isinstance(registry.registry, CollectorRegistry)
-    assert len(METRIC_NAMES) == 18
+    assert len(METRIC_NAMES) == 19
     for metric_name in METRIC_NAMES:
         assert hasattr(registry, metric_name)
 

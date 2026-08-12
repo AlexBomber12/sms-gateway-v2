@@ -28,6 +28,7 @@ def fake_modem_props() -> MagicMock:
     props.get_state = AsyncMock(return_value="registered")
     props.get_signal_quality = AsyncMock(return_value=(76, True))
     props.get_sim = AsyncMock(return_value="/org/freedesktop/ModemManager1/SIM/0")
+    props.call_enable = AsyncMock(return_value=None)
     return props
 
 

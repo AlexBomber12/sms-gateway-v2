@@ -254,16 +254,22 @@ time in GitHub repo Settings -> Packages. Without that package visibility
 change, unauthenticated hosts without a GHCR token cannot run
 `docker compose pull`.
 
-## Modem state after host reboot
+## Modem state recovery
 
-On Ubuntu 24.04, ModemManager does not consistently auto-enable USB modems on
-boot. After a host reboot, `mmcli -m 0` may show `state: disabled` and
-`signal: 0%`, which causes the relay to log `signal_read percent=0` and
-`registration_read registration=unknown`.
+Three ModemManager failure scenarios have been observed on the production host.
 
-Install the host-side modem enable unit from the repository root:
+**ModemManager restart leaves modem disabled**
+
+After a clean ModemManager restart, the modem may reappear as `state: disabled`
+with `signal: 0%`. The host-side oneshot unit enables it after boot and after
+ModemManager restarts. The relay watchdog also reads the real Modem.State value
+on every poll and calls `Modem.Enable(true)` for `disabled`, `locked`, and
+`failed` states.
+
+Install the host-side script and unit from the repository root:
 
 ```bash
+sudo install -m 0755 deploy/systemd/sms-gateway-modem-enable.sh /usr/local/sbin/sms-gateway-modem-enable.sh
 sudo install -m 0644 deploy/systemd/sms-gateway-modem-enable.service /etc/systemd/system/sms-gateway-modem-enable.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now sms-gateway-modem-enable.service
@@ -273,28 +279,42 @@ Verify that the oneshot unit completed and the modem is enabled:
 
 ```bash
 systemctl status sms-gateway-modem-enable.service
-mmcli -m 0
+mmcli -L
+mmcli -m <index>
 ```
 
-`systemctl status` should show `Active: active (exited)` after the first run.
-`mmcli -m 0` should report `state: enabled`, and shortly after
-`state: registered` once the modem associates with the network.
+`systemctl status` should show `Active: active (exited)`. The script resolves
+the current modem index from `mmcli -L`, short-circuits when the modem is already
+`registered`, `enabled`, `searching`, `connecting`, or `connected`, and retries
+enable up to 10 times with a 5 second delay.
 
-The unit waits for `ModemManager.service`, sleeps for 5 seconds to allow the
-cold-boot scan to settle, then retries `mmcli -m 0 --enable` up to 5 times with
-a 3 second delay between attempts. If the modem is permanently absent, the unit
-fails with a logged error instead of looping indefinitely.
-
-The post-reboot manual enable command is superseded by the systemd unit for
-normal operations. Keep it as a diagnostic fallback when the unit is not
-installed or when intentionally testing a disabled modem state:
+Reload the AppArmor profile after deploying this PR because the relay now needs
+the `Modem.Enable` D-Bus member in addition to `Modem.Reset`:
 
 ```bash
-sudo mmcli -m 0 --enable
+sudo install -m 0644 deploy/apparmor/sms-gateway-v2 /etc/apparmor.d/sms-gateway-v2
+sudo apparmor_parser -r -W /etc/apparmor.d/sms-gateway-v2
 ```
 
-The relay container itself is healthy while the modem is disabled and resumes
-normal operation as soon as the modem registers; no container restart is needed.
+If the reload is skipped because of a stale compiled cache, use the clean reload
+procedure in the AppArmor section above.
+
+**D-Bus path migration after USB re-enumeration**
+
+USB re-enumeration can move the modem from `/Modem/0` to `/Modem/1` or
+`/Modem/2`. The relay recovers on its own through cached-path refresh logic when
+a stale object path disappears. No operator action or container restart is
+required.
+
+**Firmware freeze with power state off**
+
+`power state: off` combined with an `Invalid transition` error is not
+recoverable by any software command. The following were verified not to recover
+this state: `mmcli --enable`, `mmcli --set-power-state-on`, USB unbind and
+rebind, `AT+CFUN=1,1`, and a ModemManager restart.
+
+Physically power cycle the modem or the USB port. After the device reappears in
+ModemManager, `mmcli -m <index> --enable` succeeds normally.
 
 ## Logs
 

@@ -87,6 +87,8 @@ def build_relay(
                 registration=registration,
             )
         ),
+        enable_cooldown_seconds=settings.modem_watchdog_enable_cooldown_seconds,
+        enable_frozen_cooldown_seconds=settings.modem_watchdog_enable_frozen_cooldown_seconds,
     )
     cleanup_scheduler = CleanupScheduler(
         queue=queue,
