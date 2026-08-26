@@ -17,6 +17,7 @@ class TelegramMessage(BaseModel):
     chat_id: str
     text: str
     parse_mode: str | None = "HTML"
+    disable_notification: bool = False
 
     @classmethod
     def from_sms(cls, chat_id: str, number: str, text: str) -> Self:

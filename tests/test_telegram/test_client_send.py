@@ -72,6 +72,45 @@ async def test_send_message_returns_successfully_on_ok_response(
     sleep.assert_not_awaited()
 
 
+async def test_telegram_client_omits_disable_notification_when_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post = AsyncMock(side_effect=[ok_response()])
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+
+    async with TelegramClient("token", "-100") as client:
+        await client.send_message(
+            TelegramMessage(chat_id="-100", text="hello", disable_notification=False)
+        )
+
+    post.assert_awaited_once_with(
+        "sendMessage",
+        json={"chat_id": "-100", "text": "hello", "parse_mode": "HTML"},
+    )
+
+
+async def test_telegram_client_sends_disable_notification_when_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post = AsyncMock(side_effect=[ok_response()])
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+
+    async with TelegramClient("token", "-100") as client:
+        await client.send_message(
+            TelegramMessage(chat_id="-100", text="hello", disable_notification=True)
+        )
+
+    post.assert_awaited_once_with(
+        "sendMessage",
+        json={
+            "chat_id": "-100",
+            "text": "hello",
+            "parse_mode": "HTML",
+            "disable_notification": True,
+        },
+    )
+
+
 async def test_send_message_uses_message_chat_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
