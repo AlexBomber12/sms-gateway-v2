@@ -184,12 +184,18 @@ async def test_heartbeat_degraded_when_delete_failures_present() -> None:
     assert "- modem state:" not in text
 
 
-async def test_heartbeat_degraded_when_telegram_stale() -> None:
+async def test_heartbeat_stays_alive_when_no_recent_delivery() -> None:
     telegram_client = _make_telegram_client()
+    stale_telegram_ok = datetime.now(UTC) - timedelta(days=30)
     relay = _make_relay(
         modem_state="registered",
+        modem_signal_percent=86,
+        modem_operator="I TIM",
+        modem_registration="roaming",
+        queue_pending_count=0,
+        queue_failed_count=0,
         sms_delete_failures_count=0,
-        last_telegram_success_at=datetime.now(UTC) - timedelta(hours=50),
+        last_telegram_success_at=stale_telegram_ok,
     )
     scheduler = HeartbeatScheduler(
         telegram_client=telegram_client,
@@ -200,31 +206,38 @@ async def test_heartbeat_degraded_when_telegram_stale() -> None:
 
     await scheduler._send_heartbeat()
 
+    # Regression for the 2026-08-26 false alarm: quiet SMS traffic is expected here.
     text = telegram_client.send_message.await_args.args[0].text
-    assert "<b>SMS Gateway v2: ALERT</b>" in text
-    assert "- last successful delivery:" in text
-    assert "ago" in text
-    assert "- modem state:" not in text
-    assert "- delete failures:" not in text
+    assert "<b>SMS Gateway v2: alive</b>" in text
+    assert "ALERT" not in text
+    assert "<b>Reasons:</b>" not in text
+    assert f"Last Telegram OK: {stale_telegram_ok.strftime('%Y-%m-%dT%H:%M:%SZ')}" in text
 
 
-async def test_heartbeat_degraded_when_telegram_stale_naive_timestamp() -> None:
-    telegram_client = _make_telegram_client()
-    relay = _make_relay(
+@pytest.mark.parametrize(
+    "delivery_age",
+    [
+        timedelta(hours=1),
+        timedelta(hours=49),
+        timedelta(days=40),
+    ],
+)
+def test_heartbeat_degraded_reasons_do_not_include_delivery_age(
+    delivery_age: timedelta,
+) -> None:
+    state = RelayState(
+        status="running",
+        started_at=datetime(2026, 5, 1, 18, 0, 0, tzinfo=UTC),
+        last_sms_received_at=datetime(2026, 4, 28, 14, 22, 11, tzinfo=UTC),
+        last_error=None,
         modem_state="registered",
-        last_telegram_success_at=datetime.now() - timedelta(hours=50),
-    )
-    scheduler = HeartbeatScheduler(
-        telegram_client=telegram_client,
-        relay=relay,
-        chat_id="-100",
-        interval_seconds=86400.0,
+        queue_pending_count=0,
+        queue_failed_count=0,
+        sms_delete_failures_count=0,
+        last_telegram_success_at=datetime.now(UTC) - delivery_age,
     )
 
-    await scheduler._send_heartbeat()
-
-    text = telegram_client.send_message.await_args.args[0].text
-    assert "- last successful delivery:" in text
+    assert heartbeat_module._degradation_reasons(state) == []
 
 
 async def test_heartbeat_degraded_shows_multiple_reasons() -> None:
@@ -244,9 +257,12 @@ async def test_heartbeat_degraded_shows_multiple_reasons() -> None:
     await scheduler._send_heartbeat()
 
     text = telegram_client.send_message.await_args.args[0].text
-    assert "- modem state: disabled (expected registered)" in text
-    assert "- delete failures: 3" in text
-    assert "- last successful delivery:" in text
+    reason_lines = [line for line in text.splitlines() if line.startswith("- ")]
+    assert reason_lines == [
+        "- modem state: disabled (expected registered)",
+        "- delete failures: 3",
+    ]
+    assert "- last successful delivery:" not in text
 
 
 async def test_heartbeat_gracefully_renders_unknown_when_state_incomplete() -> None:

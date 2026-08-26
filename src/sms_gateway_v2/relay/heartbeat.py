@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from html import escape
 
 import structlog
@@ -13,11 +13,8 @@ from sms_gateway_v2.relay.relay import SmsRelay
 from sms_gateway_v2.telegram import TelegramClient
 from sms_gateway_v2.telegram.exceptions import TelegramError
 from sms_gateway_v2.telegram.models import TelegramMessage
-from sms_gateway_v2.util.time_format import format_duration_since
 
 logger = structlog.get_logger(__name__)
-
-_TELEGRAM_STALE_THRESHOLD = timedelta(hours=48)
 
 
 class HeartbeatScheduler:
@@ -99,13 +96,6 @@ def _degradation_reasons(state: RelayState) -> list[str]:
         reasons.append(f"- modem state: {escape(state.modem_state)} (expected registered)")
     if state.sms_delete_failures_count > 0:
         reasons.append(f"- delete failures: {state.sms_delete_failures_count}")
-    if state.last_telegram_success_at is not None:
-        now = datetime.now(UTC)
-        timestamp = state.last_telegram_success_at
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=UTC)
-        if now - timestamp > _TELEGRAM_STALE_THRESHOLD:
-            reasons.append(f"- last successful delivery: {format_duration_since(timestamp)} ago")
     return reasons
 
 
