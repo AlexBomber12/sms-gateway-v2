@@ -77,9 +77,11 @@ class TelegramClient:
                 duration_ms=0,
             )
             try:
-                payload = {"chat_id": message.chat_id, "text": message.text}
+                payload: dict[str, object] = {"chat_id": message.chat_id, "text": message.text}
                 if message.parse_mode is not None:
                     payload["parse_mode"] = message.parse_mode
+                if message.disable_notification:
+                    payload["disable_notification"] = True
                 response = await client.post(
                     "sendMessage",
                     json=payload,

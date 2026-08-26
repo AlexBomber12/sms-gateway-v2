@@ -56,6 +56,12 @@ def test_telegram_message_defaults_parse_mode_to_html() -> None:
     assert message.parse_mode == "HTML"
 
 
+def test_telegram_message_defaults_to_audible() -> None:
+    message = TelegramMessage(chat_id="123", text="hello")
+
+    assert message.disable_notification is False
+
+
 def test_from_sms_html_escapes_number_and_text() -> None:
     message = TelegramMessage.from_sms(
         chat_id="123",
@@ -68,6 +74,12 @@ def test_from_sms_html_escapes_number_and_text() -> None:
         == "<b>&lt;+1&amp;&quot;2&quot;&gt;</b>\nhello &lt;world&gt; &amp; &quot;friends&quot;"
     )
     assert message.parse_mode == "HTML"
+
+
+def test_from_sms_does_not_disable_notification() -> None:
+    message = TelegramMessage.from_sms(chat_id="123", number="+15551234567", text="hello")
+
+    assert message.disable_notification is False
 
 
 @pytest.mark.parametrize("text", ["", "   ", "\n\t"])
