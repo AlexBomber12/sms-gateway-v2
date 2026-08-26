@@ -46,12 +46,16 @@ profile sms-gateway-v2 flags=(attach_disconnected,mediate_deleted) {
 
   deny ptrace (trace,read,tracedby,readby) peer=unconfined,
 
-  # runc sends SIGTERM at docker stop start, SIGKILL after the grace timeout,
-  # and may also send SIGCONT/SIGSTOP during pause/unpause flows. Without an
-  # explicit set=(...) clause AppArmor 3.x denies these even though peer is
-  # unconfined, which slows graceful shutdown and clutters dmesg with
-  # apparmor="DENIED" entries.
-  signal (receive) set=(term, kill, cont, stop, hup, int, quit, usr1, usr2) peer=unconfined,
+  # The container runtime sends SIGTERM at shutdown, SIGKILL after Docker's
+  # grace timeout, and may send SIGCONT/SIGSTOP during pause/unpause flows.
+  # Keep the explicit set=(...) clause: AppArmor 3.x otherwise denies these
+  # lifecycle signals and graceful shutdown stalls.
+  # Do not add a peer= clause to this inbound rule. The runtime label varies
+  # by host and version; this deployment has observed both unconfined and runc
+  # senders. Pinning the peer silently broke lifecycle delivery twice. This
+  # rule only accepts the listed inbound signals, while outbound signaling
+  # remains limited to processes running under sms-gateway-v2 below.
+  signal (receive) set=(term, kill, cont, stop, hup, int, quit, usr1, usr2),
   signal (send, receive) set=(term, kill, cont, stop, hup, int, quit, usr1, usr2) peer=sms-gateway-v2,
 
   /run/dbus/system_bus_socket r,
