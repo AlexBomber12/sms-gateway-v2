@@ -155,6 +155,16 @@ missing a rule for an observed runtime access. Report the denial upstream as a
 follow-up PR with the full audit line and the operation that triggered it.
 Absence of fresh DENIED entries after the recreate is the expected state.
 
+Signal denials produce no application-level error. From the outside, a healthy
+`docker compose up -d --force-recreate` completes in roughly one second. A
+duration of ten seconds or more means SIGTERM is not reaching the process and
+Docker is falling back to SIGKILL after the grace period. Confirm this class of
+failure with `sudo dmesg -T | grep -i apparmor` and look for an
+`apparmor="DENIED" operation="signal"` entry. The queue is durable, so no SMS is
+lost when this happens, but graceful shutdown does not run. A host reboot can
+change which AppArmor profiles are loaded, so repeat this check after a kernel
+upgrade rather than only after deploying a new profile.
+
 If the custom profile breaks production behavior and the service must be brought
 back online while debugging, temporarily change the host's local compose file to
 `apparmor=unconfined` and recreate the container. Keep that change uncommitted.
