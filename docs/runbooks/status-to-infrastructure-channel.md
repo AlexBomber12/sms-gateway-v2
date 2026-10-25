@@ -19,11 +19,11 @@ This runbook uses the **existing** SMS Gateway v2 heartbeat scheduler. It does n
 
 ## Read-only checks before change
 
-Run on SERVER, from the existing working checkout:
+Run on SERVER after obtaining a reviewed source commit. The script may be run from a **separate clean checkout** and must point explicitly to the current production `deploy/.env` file; it does not assume the script checkout contains production credentials:
 
 ```bash
 cd /home/alexey/repos/sms-gateway-v2
-python3 scripts/route_heartbeat_chat.py check
+python3 scripts/route_heartbeat_chat.py check --env-file /home/alexey/repos/sms-gateway-v2/deploy/.env
 
 docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' sms-gateway-v2
 docker inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' sms-gateway-v2
@@ -44,8 +44,8 @@ Use a **reviewed Git checkout** of this script. The channel ID is private operat
 
 ```bash
 : "${INFRA_CHANNEL_ID:?Set the private numeric infrastructure channel ID}"
-python3 scripts/route_heartbeat_chat.py set --chat-id="$INFRA_CHANNEL_ID"
-python3 scripts/route_heartbeat_chat.py check
+python3 scripts/route_heartbeat_chat.py set --env-file /home/alexey/repos/sms-gateway-v2/deploy/.env --chat-id="$INFRA_CHANNEL_ID"
+python3 scripts/route_heartbeat_chat.py check --env-file /home/alexey/repos/sms-gateway-v2/deploy/.env
 ```
 
 This idempotent program preserves `TELEGRAM_CHAT_ID` and `TELEGRAM_BOT_TOKEN` byte-for-byte, rejects duplicates/invalid destinations, refuses insecure or symlinked `deploy/.env`, and writes the file atomically. It does **not** restart the container.
@@ -64,7 +64,7 @@ Verify:
 ```bash
 docker inspect -f '{{.State.Health.Status}}' sms-gateway-v2
 curl --fail --silent http://127.0.0.1:8091/healthz
-python3 scripts/route_heartbeat_chat.py check
+python3 scripts/route_heartbeat_chat.py check --env-file /home/alexey/repos/sms-gateway-v2/deploy/.env
 ```
 
 Verify with a safe container environment metadata check (print only `True`/`False`) that the status chat is configured and `TELEGRAM_CHAT_ID` did not change from the original. Do not dump `docker compose config` or `docker inspect .Config.Env` to terminal because these contain the real bot token and SMS destination.
@@ -76,8 +76,8 @@ The first scheduled status post can occur **up to 24 hours after the SMS Gateway
 If the user decides to revert the route, restore the original lack of a dedicated heartbeat setting and recreate only SMS Gateway using the same verified, locally cached image:
 
 ```bash
-python3 scripts/route_heartbeat_chat.py unset
-python3 scripts/route_heartbeat_chat.py check
+python3 scripts/route_heartbeat_chat.py unset --env-file /home/alexey/repos/sms-gateway-v2/deploy/.env
+python3 scripts/route_heartbeat_chat.py check --env-file /home/alexey/repos/sms-gateway-v2/deploy/.env
 project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' sms-gateway-v2)"
 docker compose -p "$project" --env-file deploy/.env -f deploy/docker-compose.yml \
   up -d --no-deps --no-build --pull never sms-gateway-v2
