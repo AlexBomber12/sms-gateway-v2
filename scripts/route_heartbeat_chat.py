@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 import re
 import stat
 import tempfile
+from pathlib import Path
 
 KEY = "HEARTBEAT_TELEGRAM_CHAT_ID"
 CHANNEL_ID = re.compile(r"-100[0-9]{7,}\Z")
@@ -67,8 +67,12 @@ def main() -> int:
     if not path.is_absolute() or path.name != ".env" or path.parent.name != "deploy":
         raise SystemExit("Refusing: provide an absolute path to the real deploy/.env")
     s = path.lstat()
-    if not stat.S_ISREG(s.st_mode) or s.st_uid != os.geteuid() or stat.S_IMODE(s.st_mode) != 0o600:
-        raise SystemExit("Refusing: deploy/.env must be a regular 0600 file owned by the invoking user")
+    if (
+        not stat.S_ISREG(s.st_mode)
+        or s.st_uid != os.geteuid()
+        or stat.S_IMODE(s.st_mode) != 0o600
+    ):
+        raise SystemExit("Refusing: deploy/.env must be a user-owned regular 0600 file")
 
     current = path.read_text(encoding="utf-8")
     if a.action == "check":
