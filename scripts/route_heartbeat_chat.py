@@ -34,10 +34,10 @@ def rewrite_env(contents: str, channel: str | None) -> str:
     if len(primary) != 1 or not primary[0] or len(tokens) != 1 or not tokens[0]:
         raise ValueError("expected exactly one existing SMS destination and bot token")
     if channel is not None:
-        if not CHANNEL_ID.fullmatch(channel):
-            raise ValueError("status destination must be a Telegram private channel ID")
         if channel == primary[0]:
             raise ValueError("status channel must differ from SMS destination")
+        if not CHANNEL_ID.fullmatch(channel):
+            raise ValueError("status destination must be a Telegram private channel ID")
 
     positions = [i for i, line in enumerate(lines) if _get_assignment(line, KEY) is not None]
     if len(positions) > 1:
