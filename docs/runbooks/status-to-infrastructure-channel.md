@@ -43,7 +43,8 @@ Confirm no active, unrecoverable SMS/modem operation before a controlled restart
 Use a **reviewed Git checkout** of this script. The channel ID is private operator configuration, not stored in this public repository.
 
 ```bash
-python3 scripts/route_heartbeat_chat.py set --chat-id=-100<PRIVATE_CHANNEL_ID>
+: "${INFRA_CHANNEL_ID:?Set the private numeric infrastructure channel ID}"
+python3 scripts/route_heartbeat_chat.py set --chat-id="$INFRA_CHANNEL_ID"
 python3 scripts/route_heartbeat_chat.py check
 ```
 
