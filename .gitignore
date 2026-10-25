@@ -36,3 +36,6 @@ logs/
 # pipeline-orchestrator artifacts (regenerated, do not commit)
 artifacts/
 tasks/QUEUE.md
+
+# Temporary atomic environment-file rewrites must never be committed.
+.env.tmp-*
