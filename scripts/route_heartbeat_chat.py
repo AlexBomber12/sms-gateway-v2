@@ -4,6 +4,7 @@
 Operator-owned deploy/.env stays outside Git. This tool never prints credentials,
 never invokes Compose, and makes only one atomic key change.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -67,11 +68,7 @@ def main() -> int:
     if not path.is_absolute() or path.name != ".env" or path.parent.name != "deploy":
         raise SystemExit("Refusing: provide an absolute path to the real deploy/.env")
     s = path.lstat()
-    if (
-        not stat.S_ISREG(s.st_mode)
-        or s.st_uid != os.geteuid()
-        or stat.S_IMODE(s.st_mode) != 0o600
-    ):
+    if not stat.S_ISREG(s.st_mode) or s.st_uid != os.geteuid() or stat.S_IMODE(s.st_mode) != 0o600:
         raise SystemExit("Refusing: deploy/.env must be a user-owned regular 0600 file")
 
     current = path.read_text(encoding="utf-8")
