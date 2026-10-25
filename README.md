@@ -58,6 +58,8 @@ this stack, follow the runbook in
 
 - Rotate Telegram bot credentials with
   [`docs/runbooks/rotate-telegram-token.md`](docs/runbooks/rotate-telegram-token.md).
+- Route existing daily SMS Gateway status to a separate infrastructure channel with
+  [`docs/runbooks/status-to-infrastructure-channel.md`](docs/runbooks/status-to-infrastructure-channel.md).
 
 ## Project Layout
 
