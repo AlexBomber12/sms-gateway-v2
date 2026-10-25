@@ -1,4 +1,5 @@
 """Offline tests for routing heartbeat without touching SMS delivery."""
+
 from __future__ import annotations
 
 import sys
