@@ -1,13 +1,13 @@
 """Offline tests for routing heartbeat without touching SMS delivery."""
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from route_heartbeat_chat import rewrite_env  # noqa: E402
+from route_heartbeat_chat import rewrite_env
 
 SAMPLE = "RELAY_ENABLED=true\nTELEGRAM_BOT_TOKEN=test123:private\nTELEGRAM_CHAT_ID=123456\n"
 CHANNEL = "-1001234567890"
@@ -37,7 +37,10 @@ def test_reject_duplicate_or_missing_primary():
     with pytest.raises(ValueError, match="SMS destination"):
         rewrite_env(SAMPLE + "TELEGRAM_CHAT_ID=another\n", CHANNEL)
     with pytest.raises(ValueError, match="status channel"):
-        rewrite_env(SAMPLE + "HEARTBEAT_TELEGRAM_CHAT_ID=1\nHEARTBEAT_TELEGRAM_CHAT_ID=2\n", CHANNEL)
+        rewrite_env(
+            SAMPLE + "HEARTBEAT_TELEGRAM_CHAT_ID=1\nHEARTBEAT_TELEGRAM_CHAT_ID=2\n",
+            CHANNEL,
+        )
 
 
 @pytest.mark.parametrize("invalid", ["999999", "-10042", "not-a-chat", "-100abc", ""])
@@ -52,7 +55,12 @@ def test_never_route_sms_to_infrastructure_channel():
 
 
 def test_preserve_original_secret_fields_byte_for_byte():
-    original = "# comment\nRELAY_ENABLED=true\nTELEGRAM_BOT_TOKEN='fake-token'\nTELEGRAM_CHAT_ID=\"123456\"\n"
+    original = (
+        "# comment\n"
+        "RELAY_ENABLED=true\n"
+        "TELEGRAM_BOT_TOKEN='fake-token'\n"
+        'TELEGRAM_CHAT_ID="123456"\n'
+    )
     result = rewrite_env(original, CHANNEL)
     assert result.startswith(original)
     assert rewrite_env(result, None) == original
