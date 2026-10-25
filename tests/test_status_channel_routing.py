@@ -40,7 +40,7 @@ def test_reject_duplicate_or_missing_primary():
         rewrite_env(SAMPLE + "HEARTBEAT_TELEGRAM_CHAT_ID=1\nHEARTBEAT_TELEGRAM_CHAT_ID=2\n", CHANNEL)
 
 
-@pytest.mark.parametrize("invalid", ["123456", "-10042", "not-a-chat", "-100abc", ""])
+@pytest.mark.parametrize("invalid", ["999999", "-10042", "not-a-chat", "-100abc", ""])
 def test_reject_invalid_channel(invalid):
     with pytest.raises(ValueError, match="private channel"):
         rewrite_env(SAMPLE, invalid)
