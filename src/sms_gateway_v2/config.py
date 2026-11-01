@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     modem_reset_reappear_timeout_seconds: float = Field(default=45.0, ge=5.0, le=180.0)
     cleanup_interval_seconds: float = Field(default=3600.0, ge=60.0)
     heartbeat_enabled: bool = True
+    heartbeat_alert_only: bool = False
     heartbeat_interval_seconds: float = Field(default=86400.0, ge=60.0)
     heartbeat_telegram_chat_id: str = ""
 
