@@ -326,6 +326,41 @@ rebind, `AT+CFUN=1,1`, and a ModemManager restart.
 Physically power cycle the modem or the USB port. After the device reappears in
 ModemManager, `mmcli -m <index> --enable` succeeds normally.
 
+## Important error notifications
+
+After deploying a version that includes `AlertOnlyScheduler`, keep `HEARTBEAT_ENABLED=true`
+and set `HEARTBEAT_ALERT_ONLY=true` in the production environment. The existing
+`HEARTBEAT_TELEGRAM_CHAT_ID` destination and SMS forwarding credentials remain in use.
+Recreate only `sms-gateway-v2` with a pinned image; changing an environment file alone
+does not change a running container.
+
+The observer checks every 60 seconds. A non-running relay, unavailable/unregistered modem,
+failed delivery queue, unavailable queue counts, or pending queue without new successful
+delivery must persist for 15 minutes before one alert is sent. Successful delivery resets
+the pending-queue clock. Historic SMS deletion failures and absence of incoming SMS do not
+trigger alerts. Brief failures and normal healthy operation send nothing.
+
+Deduplication and delivery backoff live in `STATE_DIR/notification-incidents.sqlite3`,
+separate from SMS queue/dedup storage. One unresolved incident may remind after 24 hours.
+A recovery message requires a previously delivered alert and 120 seconds of healthy
+observations with an empty queue. A gap longer than three poll intervals restarts the
+persistence/recovery observation window. The SQLite attempt lease prevents immediate
+retries after restart; network-ambiguous outcomes cannot guarantee exactly-once delivery.
+Telegram failure retries back off up to an hour, respecting reported rate limits up to
+24 hours. Notifier storage errors are logged and do not stop the SMS relay.
+
+The in-process observer cannot report a stopped container, failed application startup,
+complete SERVER outage or failed Internet connection while it cannot reach Telegram.
+An independent observer is required for those failures. Real SMS and modem resets must
+not be used as notification fixtures. The owner runbook is
+[SMS Gateway notifications](https://github.com/AlexBomber12/knowledge-vault/blob/main/20-homelab/notifications/sms-gateway.md).
+
+Rollback: restore the previous pinned image and environment, recreate only this service,
+and retain the current SMS volume. The previous image ignores the additional notification
+database. Do not restore an older SMS queue over newer messages or delete dedup records.
+Setting `HEARTBEAT_ALERT_ONLY=false` restores the previous periodic heartbeat policy;
+setting `HEARTBEAT_ENABLED=false` disables both heartbeat and important-error notifications.
+
 ## Logs
 
 ```bash

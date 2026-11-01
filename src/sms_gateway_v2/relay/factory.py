@@ -9,6 +9,7 @@ from sms_gateway_v2.queue import Queue
 from sms_gateway_v2.telegram import TelegramClient
 from sms_gateway_v2.worker import DeliveryWorker
 
+from .alerts import AlertOnlyScheduler
 from .cleanup_scheduler import CleanupScheduler
 from .exceptions import RelayError
 from .heartbeat import HeartbeatScheduler
@@ -103,10 +104,18 @@ def build_relay(
             if settings.heartbeat_telegram_chat_id != ""
             else settings.telegram_chat_id
         )
-        heartbeat_scheduler = HeartbeatScheduler(
-            telegram_client=telegram_client,
-            relay=relay,
-            chat_id=heartbeat_chat_id,
-            interval_seconds=settings.heartbeat_interval_seconds,
-        )
+        if settings.heartbeat_alert_only:
+            heartbeat_scheduler = AlertOnlyScheduler(
+                telegram_client=telegram_client,
+                relay=relay,
+                chat_id=heartbeat_chat_id,
+                state_dir=settings.state_dir,
+            )
+        else:
+            heartbeat_scheduler = HeartbeatScheduler(
+                telegram_client=telegram_client,
+                relay=relay,
+                chat_id=heartbeat_chat_id,
+                interval_seconds=settings.heartbeat_interval_seconds,
+            )
     return relay, gauge_updater, watchdog, cleanup_scheduler, heartbeat_scheduler
